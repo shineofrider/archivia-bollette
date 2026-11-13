@@ -394,28 +394,28 @@ def _mark_iren_invoice_click_target(page, portal_id: str) -> dict:
 
 
 def _wait_for_iren_detail_panel(page, timeout: int) -> None:
-    """Wait asynchronously for the inner 'Voci di spesa' heading.
+    """Wait for the second 'Voci di spesa' match: the heading inside the panel.
 
-    It may not exist immediately after Angular changes the route. Do not call
-    count() first: that would snapshot the DOM before the asynchronous render.
+    IrenYou first renders the tab label and then renders the same text again
+    as the content heading. Using nth(1) waits for that second DOM occurrence
+    instead of accidentally accepting the already-visible tab label.
     """
     matches = page.get_by_text(
         re.compile(r"^\s*Voci di spesa\s*$", re.IGNORECASE)
     )
-    panel_heading = matches.last
+    panel_heading = matches.nth(1)
     try:
         panel_heading.wait_for(state="visible", timeout=timeout)
     except PlaywrightTimeoutError as exc:
         raise IrenPortalError(
-            "Dettaglio aperto, ma il titolo interno 'Voci di spesa' non è diventato visibile "
-            f"entro {timeout} ms"
+            "Dettaglio aperto, ma il titolo interno 'Voci di spesa' "
+            f"(seconda occorrenza) non è diventato visibile entro {timeout} ms"
         ) from exc
 
     log.info(
-        "Dettaglio Iren: titolo 'Voci di spesa' visibile (%d occorrenze)",
+        "Dettaglio Iren: titolo interno 'Voci di spesa' visibile (%d occorrenze)",
         matches.count(),
     )
-
 
 def _save_iren_detail_diagnostics(page, output_dir: Path, portal_id: str) -> None:
     """Save the current page screenshot and visible text after a per-invoice failure."""

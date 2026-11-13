@@ -307,24 +307,32 @@ def test_iren_detail_url_requires_the_invoice_detail_route():
 
 
 
-class FakeLastTextLocator:
-    def __init__(self, owner):
+
+class FakeNthTextLocator:
+    def __init__(self, owner, index):
         self.owner = owner
+        self.index = index
         self.wait_arguments = None
 
     def wait_for(self, state=None, timeout=None):
         self.wait_arguments = {"state": state, "timeout": timeout}
-        # Simulate Angular rendering the duplicate title after navigation.
-        self.owner.locator_count = 2
+        # Simulate Angular rendering the detail-panel heading after navigation.
+        self.owner.locator_count = self.index + 1
 
 
 class FakeDuplicateTextLocator:
     def __init__(self, count):
         self.locator_count = count
-        self.last = FakeLastTextLocator(self)
+        self.requested_index = None
+        self.selected = None
 
     def count(self):
         return self.locator_count
+
+    def nth(self, index):
+        self.requested_index = index
+        self.selected = FakeNthTextLocator(self, index)
+        return self.selected
 
 
 class FakeDuplicateTextPage:
@@ -335,27 +343,30 @@ class FakeDuplicateTextPage:
         return self.locator
 
 
-def test_detail_wait_waits_for_title_even_when_it_is_not_in_dom_yet():
-    page = FakeDuplicateTextPage(count=0)
-
-    _wait_for_iren_detail_panel(page, timeout=12000)
-
-    assert page.locator.last.wait_arguments == {"state": "visible", "timeout": 12000}
-    assert page.locator.count() == 2
-
-
-def test_detail_wait_logs_duplicate_titles_after_dynamic_render():
+def test_detail_wait_waits_for_second_heading_when_only_tab_label_exists():
     page = FakeDuplicateTextPage(count=1)
 
     _wait_for_iren_detail_panel(page, timeout=12000)
 
-    assert page.locator.last.wait_arguments == {"state": "visible", "timeout": 12000}
+    assert page.locator.requested_index == 1
+    assert page.locator.selected.wait_arguments == {"state": "visible", "timeout": 12000}
+    assert page.locator.count() == 2
 
 
-def test_detail_wait_does_not_preemptively_fail_when_title_not_yet_present():
-    # The locator is expected to wait; it must not be rejected from a count() snapshot.
+def test_detail_wait_selects_second_heading_when_both_are_rendered():
+    page = FakeDuplicateTextPage(count=2)
+
+    _wait_for_iren_detail_panel(page, timeout=12000)
+
+    assert page.locator.requested_index == 1
+    assert page.locator.selected.wait_arguments == {"state": "visible", "timeout": 12000}
+
+
+def test_detail_wait_does_not_fail_before_angular_adds_panel_heading():
+    # A zero-count DOM snapshot must not short-circuit the explicit locator wait.
     page = FakeDuplicateTextPage(count=0)
 
     _wait_for_iren_detail_panel(page, timeout=12000)
 
-    assert page.locator.last.wait_arguments is not None
+    assert page.locator.requested_index == 1
+    assert page.locator.count() == 2
