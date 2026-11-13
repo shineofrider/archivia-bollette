@@ -4,6 +4,7 @@ from app.iren import (
     _dismiss_cookie_notice,
     parse_iren_invoice_card,
     parse_iren_invoice_detail,
+    parse_iren_invoice_list_text,
     sort_iren_invoices_newest_first,
 )
 
@@ -144,3 +145,67 @@ def test_no_cookie_notice_does_not_block_portal():
     page = FakePage([FakeFrame("Bolletta e contratto", reject_visible=False)])
 
     assert _dismiss_cookie_notice(page) is False
+
+
+
+def test_parse_iren_invoice_list_text_extracts_all_four_visible_bills_and_sorts_newest_first():
+    page_text = """Bolletta
+Scarica storico bollette .csv
+Fattura n° .502614099672
+Contratto N°15122474
+Cliente
+28,16 €
+Scadenza 24.11.2026
+ADDEBITO DIRETTO SU C/C
+Fattura n° .502612842851
+Contratto N°15122474
+Cliente
+25,75 €
+Scadenza 23.10.2026
+PAGATA
+Fattura n° .502611542121
+Contratto N°15122474
+Cliente
+22,65 €
+Scadenza 23.09.2026
+PAGATA
+Fattura n° .502610154260
+Contratto N°15122474
+Cliente
+23,68 €
+Scadenza 25.08.2026
+PAGATA"""
+
+    invoices = parse_iren_invoice_list_text(page_text)
+
+    assert [invoice.portal_id for invoice in invoices] == [
+        "502614099672",
+        "502612842851",
+        "502611542121",
+        "502610154260",
+    ]
+    assert [invoice.amount for invoice in invoices] == [
+        "28,16 €", "25,75 €", "22,65 €", "23,68 €"
+    ]
+    assert [invoice.due_date for invoice in invoices] == [
+        "2026-11-24", "2026-10-23", "2026-09-23", "2026-08-25"
+    ]
+
+
+def test_parse_iren_invoice_list_text_ignores_unrelated_page_sections():
+    page_text = """Bolletta
+Scarica storico bollette .csv
+Contratto N°15122474
+Fattura n° .502614099672
+28,16 €
+Scadenza 24.11.2026
+Informativa Privacy"""
+
+    invoices = parse_iren_invoice_list_text(page_text)
+
+    assert len(invoices) == 1
+    assert invoices[0].portal_id == "502614099672"
+
+
+def test_parse_iren_invoice_list_text_returns_empty_when_no_cards_exist():
+    assert parse_iren_invoice_list_text("Bolletta\nNessuna fattura disponibile") == []

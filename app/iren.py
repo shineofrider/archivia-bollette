@@ -140,53 +140,51 @@ def parse_iren_invoice_detail(text: str, invoice: IrenInvoice) -> IrenInvoice:
     )
 
 
-def extract_iren_invoice_cards(page) -> list[IrenInvoice]:
-    """Read card text from the rendered bill list without depending on generated CSS classes."""
-    card_texts = page.locator("body").evaluate(
-        """body => {
-            const result = [];
-            const seen = new Set();
-            const nodes = Array.from(body.querySelectorAll("*")).filter(el => {
-                const value = (el.innerText || "").trim();
-                return /Fattura\\s*n/i.test(value) && value.length < 180;
-            });
-            for (const node of nodes) {
-                let current = node;
-                let chosen = "";
-                for (let depth = 0; current && current !== body && depth < 10; depth++, current = current.parentElement) {
-                    const value = (current.innerText || "").trim();
-                    if (value.length >= 30 && value.length <= 1200 &&
-                        /Scadenza/i.test(value) && /€/.test(value) &&
-                        /Fattura\\s*n/i.test(value)) {
-                        chosen = value;
-                        break;
-                    }
-                }
-                if (!chosen) chosen = (node.innerText || "").trim();
-                if (chosen && !seen.has(chosen)) {
-                    seen.add(chosen);
-                    result.push(chosen);
-                }
-            }
-            return result;
-        }"""
-    )
+def parse_iren_invoice_list_text(text: str) -> list[IrenInvoice]:
+    """Split the visible IrenYou page text into invoice blocks and parse each one.
 
+    The portal's card markup is dynamically generated and may vary between releases.
+    The visible text is more stable: every card starts with "Fattura n°".
+    """
+    starts = list(re.finditer(
+        r"Fattura\s*n\s*[°ºo]?\s*[.:#-]?\s*(?=[0-9])",
+        text,
+        flags=re.IGNORECASE,
+    ))
     invoices: list[IrenInvoice] = []
     seen_ids: set[str] = set()
-    for card_text in card_texts:
+
+    for index, match in enumerate(starts):
+        block_end = starts[index + 1].start() if index + 1 < len(starts) else len(text)
+        card_text = text[match.start():block_end].strip()
         invoice = parse_iren_invoice_card(card_text)
         if invoice and invoice.portal_id not in seen_ids:
             seen_ids.add(invoice.portal_id)
             invoices.append(invoice)
 
-    if not invoices:
-        raise IrenPortalError(
-            "Nessuna fattura individuata nella pagina Spese. "
-            "Il layout del portale potrebbe essere cambiato; attivare IREN_DEBUG_SCREENSHOT."
-        )
     return sort_iren_invoices_newest_first(invoices)
 
+
+def extract_iren_invoice_cards(page) -> list[IrenInvoice]:
+    """Read invoice cards from visible page text, independently of generated CSS classes."""
+    page_text = page.locator("body").inner_text(timeout=10000)
+    invoices = parse_iren_invoice_list_text(page_text)
+
+    if not invoices:
+        # Keep the diagnostic useful without logging the customer's name/address or full card contents.
+        heading_count = len(re.findall(r"Fattura\s*n", page_text, flags=re.IGNORECASE))
+        log.error(
+            "Pagina Spese caricata ma parser fatture senza risultati: titoli_fattura=%d, testo_pagina=%d caratteri",
+            heading_count, len(page_text),
+        )
+        raise IrenPortalError(
+            "La pagina Spese è visibile, ma non riesco a interpretare le schede delle fatture. "
+            "Screenshot salvato se IREN_DEBUG_SCREENSHOT=true."
+        )
+
+    log.info("Riconosciute %d fatture nella pagina Spese: %s",
+             len(invoices), [invoice.portal_id for invoice in invoices])
+    return invoices
 
 def _dismiss_cookie_notice(page) -> bool:
     """Reject the IrenYou cookie notice so it cannot cover the bills list.
