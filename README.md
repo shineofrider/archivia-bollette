@@ -11,10 +11,11 @@ Servizio self-hosted per acquisire le bollette di **Alperia (corrente)** e **Ire
 | Archivio, deduplicazione SHA-256 e SQLite | Implementato |
 | Notifiche via webhook Home Assistant | Implementato |
 | Rilevamento email di emissione Iren | Implementato |
-| Avvio Playwright solo dopo email Iren | Implementato, se abilitato |
-| Login e download IrenYou | Da verificare con il DOM reale dell'account; selettori configurabili |
+| Accesso a IrenYou e lettura elenco fatture | Implementato nel codice; da validare sul portale reale |
+| Download Iren, baseline iniziale e riconoscimento nuove fatture | Implementato nel codice; da validare sul portale reale |
+| Lettura importo, data emissione e scadenza dal portale | Implementata quando i dati sono presenti nel testo della pagina |
 
-Il flusso Alperia è pronto per il test con la casella reale. L'automazione Iren è predisposta ma rimane disabilitata finché non sono verificati login, eventuale MFA e selettore univoco del PDF. Non aggira CAPTCHA o sistemi MFA.
+Il flusso Alperia è pronto per l'uso. L'automazione Iren è stata adattata alle schermate e ai percorsi forniti, ma il primo download reale deve ancora essere verificato. Non aggira CAPTCHA o sistemi MFA.
 
 ## Percorsi archivio
 
@@ -45,7 +46,7 @@ Il progetto viene pubblicato come immagine GHCR. Non occorre clonare il reposito
 3. Inserisci l'URL raw:
    https://raw.githubusercontent.com/shineofrider/archivia-bollette/main/compose.yaml
 4. Nome progetto: archivia-bollette.
-5. Seleziona il progetto e fai Edit. Nel campo Environment incolla i parametri di .env.example e compila almeno IMAP_USERNAME e IMAP_APP_PASSWORD. Lascia IREN_AUTOMATION_ENABLED=false.
+5. Seleziona il progetto e fai Edit. Nel campo Environment incolla i parametri di .env.example e compila almeno IMAP_USERNAME e IMAP_APP_PASSWORD. Lascia IREN_AUTOMATION_ENABLED=false finché non hai verificato l'accesso al portale.
 6. In Files seleziona il progetto e premi Check, poi Up.
 7. Controlla Tools → Logs per verificare l'avvio.
 
@@ -84,21 +85,49 @@ L'app usa IMAP TLS e non richiede Gmail API. Se l'account non consente password 
 
 Il modello crea una notifica persistente; puoi sostituire l'azione con la notifica del telefono.
 
-## IrenYou
+## IrenYou: accesso e sincronizzazione fatture
 
-L'email Iren è il trigger: Chromium non si avvia negli altri cicli. Portale: https://clienti.irenyou.gruppoiren.it/
+L'email Iren è soltanto il segnale che avvia il controllo del portale. L'email non deve contenere importo o numero fattura.
 
-Per il primo avvio lascia IREN_AUTOMATION_ENABLED=false. Per completare l'automazione serviranno schermate della pagina login e dell'elenco bollette dopo accesso, oscurando i dati personali. Poi configureremo:
+Il browser segue i percorsi verificati:
 
-- IREN_USERNAME e IREN_PASSWORD
-- IREN_USERNAME_SELECTOR, IREN_PASSWORD_SELECTOR, IREN_SUBMIT_SELECTOR
-- eventualmente IREN_BILLS_URL e IREN_DOWNLOAD_SELECTOR
+1. https://clienti.irenyou.gruppoiren.it/login
+2. Accesso con email e password tramite il pulsante ACCEDI.
+3. https://clienti.irenyou.gruppoiren.it/area-riservata/home
+4. https://clienti.irenyou.gruppoiren.it/area-riservata/spese
+5. Selezione della singola fattura, apertura del dettaglio e menu Azioni → Scarica Bolletta.
 
-Il selettore deve individuare un solo documento recente. In presenza di OTP/CAPTCHA/MFA il sistema si ferma e notifica, senza tentare di aggirare le protezioni.
+### Primo avvio: inizializzazione dello storico
+
+Al primo accesso il programma legge tutte le fatture visibili nella sezione Spese e le ordina in base alla data di scadenza, dalla più recente alla più vecchia. Scarica soltanto la prima (la più recente) e registra le altre nel database SQLite con stato historical, senza scaricarle.
+
+La fattura più recente viene registrata come pending fino al completamento del download; dopo aver archiviato il PDF diventa downloaded. Se il download fallisce, rimane pending e potrà essere ritentato.
+
+### Controlli successivi
+
+A ogni nuova email Iren:
+
+- legge nuovamente l'elenco delle fatture visibili;
+- confronta l'identificativo della scheda fattura con quelli già registrati in SQLite;
+- ignora le fatture in stato historical o downloaded;
+- scarica soltanto quelle nuove o rimaste pending dopo un errore;
+- salva nel database importo, scadenza, data di emissione e numero fattura quando rilevati dal portale.
+
+La chiave di confronto è l'identificativo mostrato nella scheda dell'elenco; il numero fattura formale riportato nel dettaglio viene salvato separatamente. L'ordinamento iniziale usa la scadenza, perché è il dato cronologico visibile nell'elenco. Non si basa sull'ordine delle email.
+
+Configurazione Environment:
+
+    IREN_AUTOMATION_ENABLED=true
+    IREN_USERNAME=indirizzo_email_iren
+    IREN_PASSWORD=password_iren
+    IREN_LOGIN_URL=https://clienti.irenyou.gruppoiren.it/login
+    IREN_BILLS_URL=https://clienti.irenyou.gruppoiren.it/area-riservata/spese
+
+Lascia vuoti i selettori personalizzati finché il riconoscimento automatico non viene verificato. In presenza di OTP/CAPTCHA/MFA il sistema si ferma e notifica, senza tentare di aggirare le protezioni.
 
 ## Dati e backup
 
-- data/bollette.sqlite3: registro email e documenti.
+- data/bollette.sqlite3: registro email, documenti, stato della baseline Iren e storico delle fatture Iren.
 - data/tmp/iren-profile: eventuali cookie/sessioni IrenYou.
 - Cartelle Corrente e Gas: bollette PDF.
 
@@ -118,16 +147,18 @@ Per verificare il riconoscimento senza produrre effetti:
        TEST_FORCE_REPROCESS=false
 
 2. Salva e ricrea il container con Up.
-3. Apri Logs. Ogni ciclo mostra per ogni email candidata: UID IMAP, mittente, oggetto, corrispondenza del filtro, stato nel database e allegati PDF. La modalità scan non archivia file, non invia notifiche e non avvia Playwright.
+3. Apri Logs. La modalità scan non archivia file, non invia notifiche e non avvia Playwright.
 
-Quando nei log trovi l'email Alperia corretta, annota il suo UID e passa alla prova del download:
+Per provare una singola email:
 
        TEST_MODE=process
        TEST_PROVIDER=alperia
        TEST_UID=UID_LETTO_NEI_LOG
        TEST_FORCE_REPROCESS=false
 
-Il container elaborerà esclusivamente quell'UID. Se il messaggio non è mai stato completato, lo scaricherà e lo archivierà normalmente. Se è già nello stato done, lo salterà. Per richiedere un singolo tentativo forzato anche su un messaggio già completato, imposta TEST_FORCE_REPROCESS=true: il permesso viene registrato in SQLite e concesso una sola volta per quel messaggio. La deduplicazione SHA-256 resta attiva, quindi un PDF già archiviato non viene salvato una seconda volta.
+Per Iren usare TEST_PROVIDER=iren e l'UID della notifica Iren. Il test process esegue l'accesso al portale se IREN_AUTOMATION_ENABLED=true e può archiviare realmente i PDF.
+
+Per richiedere un singolo tentativo forzato anche su un messaggio già completato o in attesa del retry, impostare TEST_FORCE_REPROCESS=true. Il permesso viene registrato in SQLite e concesso una sola volta per quel messaggio. La deduplicazione SHA-256 resta attiva.
 
 Terminata la prova, ripristina sempre:
 

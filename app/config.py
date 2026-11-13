@@ -24,6 +24,13 @@ def load_config() -> dict[str, Any]:
         "data": Path(os.getenv("DATA_DIR", "/data")),
         "archive": Path(os.getenv("ARCHIVE_DIR", "/archive")),
     }
+    iren_config = config.get("iren", {})
+    login_url = os.getenv("IREN_LOGIN_URL", "").strip() or iren_config.get(
+        "login_url", "https://clienti.irenyou.gruppoiren.it/login"
+    )
+    bills_url = os.getenv("IREN_BILLS_URL", "").strip() or iren_config.get(
+        "bills_url", "https://clienti.irenyou.gruppoiren.it/area-riservata/spese"
+    )
     config["runtime"] = {
         "imap_host": os.getenv("IMAP_HOST", config.get("gmail", {}).get("host", "imap.gmail.com")),
         "imap_port": int(os.getenv("IMAP_PORT", config.get("gmail", {}).get("port", 993))),
@@ -39,11 +46,14 @@ def load_config() -> dict[str, Any]:
         "iren_enabled": env_bool("IREN_AUTOMATION_ENABLED", False),
         "iren_username": os.getenv("IREN_USERNAME", "").strip(),
         "iren_password": os.getenv("IREN_PASSWORD", ""),
-        "iren_login_url": os.getenv("IREN_LOGIN_URL", config.get("iren", {}).get("login_url", "https://clienti.irenyou.gruppoiren.it/")),
+        "iren_login_url": login_url,
+        "iren_home_url": iren_config.get(
+            "home_url", "https://clienti.irenyou.gruppoiren.it/area-riservata/home"
+        ),
         "iren_username_selector": os.getenv("IREN_USERNAME_SELECTOR", "").strip(),
         "iren_password_selector": os.getenv("IREN_PASSWORD_SELECTOR", 'input[type="password"]'),
         "iren_submit_selector": os.getenv("IREN_SUBMIT_SELECTOR", "").strip(),
-        "iren_bills_url": os.getenv("IREN_BILLS_URL", "").strip(),
+        "iren_bills_url": bills_url,
         "iren_download_selector": os.getenv("IREN_DOWNLOAD_SELECTOR", "").strip(),
         "iren_debug_screenshot": env_bool("IREN_DEBUG_SCREENSHOT", False),
         "iren_retry_seconds": int(os.getenv("IREN_RETRY_SECONDS", 21600)),

@@ -5,7 +5,7 @@ from pathlib import Path
 
 from .archive import PdfArchiver
 from .database import Database
-from .iren import download_iren_invoice
+from .iren import sync_iren_invoices
 from .mail import GmailImapClient, MailItem
 from .notifications import HomeAssistantNotifier
 
@@ -43,7 +43,7 @@ def _pdf_attachments(item: MailItem) -> list[tuple[str, bytes]]:
 def _archive_pdf(
     content: bytes, filename: str, provider: str, rule: dict, item: MailItem,
     archiver: PdfArchiver, database: Database, notifier: HomeAssistantNotifier,
-) -> None:
+) -> Path:
     result = archiver.save(
         provider=provider,
         subdir=str(rule["archive_subdir"]),
@@ -58,7 +58,7 @@ def _archive_pdf(
     )
     if result.duplicate:
         log.info("Documento già archiviato (SHA-256 già presente): %s", result.path)
-        return
+        return result.path
     period = f"{result.year:04d}_{result.month:02d}"
     message = f"{provider.capitalize()}: bolletta {period} archiviata in {result.path.name}"
     if result.period_source == "data-email-fallback":
@@ -68,6 +68,7 @@ def _archive_pdf(
         period=period, file=str(result.path), status="archiviata",
     )
     log.info("Archiviato %s: %s (%s)", provider, result.path, result.period_source)
+    return result.path
 
 
 def _log_test_scan(provider: str, item: MailItem, matched: bool, database: Database) -> None:
@@ -78,6 +79,73 @@ def _log_test_scan(provider: str, item: MailItem, matched: bool, database: Datab
         provider, item.uid, matched, database.message_status(item.key),
         item.sender, item.subject, len(item.attachments), pdf_names,
     )
+
+
+def _process_iren_portal(
+    item: MailItem,
+    rule: dict,
+    runtime: dict,
+    config: dict,
+    data_dir: Path,
+    archiver: PdfArchiver,
+    database: Database,
+    notifier: HomeAssistantNotifier,
+) -> None:
+    baseline_initialized = database.iren_baseline_initialized()
+    known_statuses = database.iren_invoice_statuses()
+    result = sync_iren_invoices(
+        runtime=runtime,
+        config=config,
+        output_dir=data_dir / "tmp",
+        known_statuses=known_statuses,
+        baseline_initialized=baseline_initialized,
+    )
+
+    if result.first_sync:
+        newest_portal_id = result.selected_portal_ids[0] if result.selected_portal_ids else ""
+        database.initialize_iren_baseline(
+            [invoice.as_db_dict() for invoice in result.invoices],
+            newest_portal_id,
+        )
+        log.info(
+            "Storico iniziale Iren registrato: %d fatture precedenti, fattura più recente=%s",
+            max(0, len(result.invoices) - 1), newest_portal_id or "nessuna",
+        )
+    else:
+        for invoice in result.invoices:
+            database.upsert_iren_invoice(invoice.as_db_dict())
+
+    failures = list(result.failures)
+    archived_count = 0
+
+    for downloaded in result.downloads:
+        invoice = downloaded.invoice
+        try:
+            database.upsert_iren_invoice(invoice.as_db_dict())
+            saved_path = _archive_pdf(
+                downloaded.content, downloaded.filename, "iren", rule, item,
+                archiver, database, notifier,
+            )
+            database.mark_iren_invoice_downloaded(
+                invoice.portal_id, str(saved_path), invoice.invoice_number or None
+            )
+            archived_count += 1
+        except Exception as exc:  # noqa: BLE001
+            log.exception("Errore archiviando la fattura Iren %s", invoice.portal_id)
+            failures.append((invoice.portal_id, f"Archiviazione PDF non riuscita: {exc}"))
+
+    if failures:
+        details = "; ".join(f"{portal_id}: {message}" for portal_id, message in failures)
+        raise RuntimeError(details)
+
+    if archived_count:
+        detail = f"Sincronizzazione Iren completata: scaricate e archiviate {archived_count} nuove bollette"
+    elif result.first_sync:
+        detail = "Storico Iren inizializzato; nessuna nuova bolletta da scaricare"
+    else:
+        detail = "Controllo Iren completato: nessuna nuova bolletta disponibile"
+    database.set_message(item.key, "iren", "done", detail, item.message_id, item.uid)
+    log.info(detail)
 
 
 def process_cycle(config: dict) -> None:
@@ -232,13 +300,10 @@ def process_cycle(config: dict) -> None:
                         )
                         continue
 
-                    log.info("Email Iren riconosciuta: avvio Playwright per questa sola fattura")
-                    content, filename = download_iren_invoice(runtime, config, data_dir / "tmp")
-                    _archive_pdf(content, filename, "iren", rule, item, archiver, database, notifier)
-                    database.set_message(
-                        item.key, "iren", "done", "PDF scaricato da IrenYou", item.message_id, item.uid
+                    log.info("Email Iren riconosciuta: avvio sincronizzazione portale e confronto fatture")
+                    _process_iren_portal(
+                        item, rule, runtime, config, data_dir, archiver, database, notifier
                     )
-                    log.info("Iren UID %s completata: PDF scaricato dal portale", item.uid)
                 except Exception as exc:  # noqa: BLE001
                     log.exception("Errore elaborando email %s UID %s", provider.capitalize(), item.uid)
                     database.set_message(item.key, provider, "error", str(exc), item.message_id, item.uid)

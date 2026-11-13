@@ -23,7 +23,9 @@ gmail:
   port: 993
 
 iren:
-  login_url: https://clienti.irenyou.gruppoiren.it/
+  login_url: https://clienti.irenyou.gruppoiren.it/login
+  home_url: https://clienti.irenyou.gruppoiren.it/area-riservata/home
+  bills_url: https://clienti.irenyou.gruppoiren.it/area-riservata/spese
   headless: true
   navigation_timeout_ms: 45000
   download_timeout_ms: 45000
