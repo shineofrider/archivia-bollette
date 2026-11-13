@@ -397,7 +397,7 @@ def _wait_for_iren_detail_panel(page, timeout: int) -> None:
     """Wait for the Voci di spesa tabpanel, not the tab label with the same name."""
     panel = page.get_by_role(
         "tabpanel",
-        name=re.compile(r"^\\s*Voci di spesa\\s*$", re.IGNORECASE),
+        name=re.compile(r"^\s*Voci di spesa\s*$", re.IGNORECASE),
     ).first
     if not panel.count():
         raise IrenPortalError(
