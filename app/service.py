@@ -51,9 +51,48 @@ def _pdf_attachments(item: MailItem) -> list[tuple[str, bytes]]:
     ]
 
 
+def _format_notification_date(value: str) -> str:
+    """Format an ISO date as DD/MM/YYYY while preserving unknown values."""
+    if not value:
+        return ""
+    try:
+        from datetime import date
+        return date.fromisoformat(value).strftime("%d/%m/%Y")
+    except ValueError:
+        return value
+
+
+def _iren_notification_details(invoice) -> tuple[str, dict[str, str]]:
+    """Build a human-readable HA message and structured fields for an Iren bill."""
+    lines: list[str] = []
+    extra: dict[str, str] = {}
+
+    if invoice.amount:
+        lines.append(f"Importo da pagare: {invoice.amount}")
+        extra["amount"] = invoice.amount
+    if invoice.due_date:
+        due_date = _format_notification_date(invoice.due_date)
+        lines.append(f"Scadenza: {due_date}")
+        extra["due_date"] = due_date
+    if invoice.issue_date:
+        issue_date = _format_notification_date(invoice.issue_date)
+        lines.append(f"Data emissione: {issue_date}")
+        extra["issue_date"] = issue_date
+    if invoice.invoice_number:
+        lines.append(f"Numero fattura: {invoice.invoice_number}")
+        extra["invoice_number"] = invoice.invoice_number
+
+    if invoice.portal_id:
+        extra["portal_invoice_id"] = invoice.portal_id
+
+    return "\\n".join(lines), extra
+
+
 def _archive_pdf(
     content: bytes, filename: str, provider: str, rule: dict, item: MailItem,
     archiver: PdfArchiver, database: Database, notifier: HomeAssistantNotifier,
+    notification_suffix: str = "",
+    notification_extra: dict[str, str] | None = None,
 ) -> Path:
     result = archiver.save(
         provider=provider,
@@ -74,9 +113,12 @@ def _archive_pdf(
     message = f"{provider.capitalize()}: bolletta {period} archiviata in {result.path.name}"
     if result.period_source == "data-email-fallback":
         message += " (periodo non letto dal PDF: utilizzata la data dell'email)"
+    if notification_suffix:
+        message += "\\n" + notification_suffix
     notifier.send(
         "Nuova bolletta archiviata", message, provider=provider,
         period=period, file=str(result.path), status="archiviata",
+        **(notification_extra or {}),
     )
     log.info("Archiviato %s: %s (%s)", provider, result.path, result.period_source)
     return result.path
@@ -133,9 +175,12 @@ def _process_iren_portal(
         invoice = downloaded.invoice
         try:
             database.upsert_iren_invoice(invoice.as_db_dict())
+            notification_suffix, notification_extra = _iren_notification_details(invoice)
             saved_path = _archive_pdf(
                 downloaded.content, downloaded.filename, "iren", rule, item,
                 archiver, database, notifier,
+                notification_suffix=notification_suffix,
+                notification_extra=notification_extra,
             )
             database.mark_iren_invoice_downloaded(
                 invoice.portal_id, str(saved_path), invoice.invoice_number or None

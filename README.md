@@ -83,7 +83,7 @@ L'app usa IMAP TLS e non richiede Gmail API. Se l'account non consente password 
 3. Adatta il modello home-assistant/automation.yaml usando il tuo webhook_id.
 4. Copia l'URL webhook in HA_WEBHOOK_URL nel campo Environment OMV.
 
-Il modello crea una notifica persistente; puoi sostituire l'azione con la notifica del telefono.
+Il modello crea una notifica persistente; puoi sostituire l'azione con la notifica del telefono. Per le bollette Iren il messaggio include importo da pagare, scadenza, data di emissione e numero fattura quando disponibili. Gli stessi dati sono inviati anche come campi separati nel payload webhook (amount, due_date, issue_date, invoice_number). Per Alperia il testo della notifica rimane invariato.
 
 ## IrenYou: accesso e sincronizzazione fatture
 
