@@ -188,6 +188,61 @@ def extract_iren_invoice_cards(page) -> list[IrenInvoice]:
     return sort_iren_invoices_newest_first(invoices)
 
 
+def _dismiss_cookie_notice(page) -> bool:
+    """Reject the IrenYou cookie notice so it cannot cover the bills list.
+
+    The consent manager may be rendered in the main document or an iframe.
+    We explicitly choose the non-essential-cookie rejection action.
+    """
+    reject_pattern = re.compile(r"^\s*rifiuta(?:\s+tutti)?\s*$", re.IGNORECASE)
+    cookie_notice_found = False
+
+    for frame in list(page.frames):
+        try:
+            body_text = frame.locator("body").inner_text(timeout=1500).lower()
+        except Exception:  # noqa: BLE001
+            body_text = ""
+
+        has_notice = (
+            "cookie o tecnologie simili" in body_text
+            or ("cookie" in body_text and "rifiuta" in body_text and "accetta" in body_text)
+        )
+        cookie_notice_found = cookie_notice_found or has_notice
+
+        candidates = []
+        try:
+            candidates.append(frame.get_by_role("button", name=reject_pattern).first)
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            candidates.append(frame.get_by_role("link", name=reject_pattern).first)
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            candidates.append(frame.get_by_text(reject_pattern).last)
+        except Exception:  # noqa: BLE001
+            pass
+
+        for candidate in candidates:
+            try:
+                if candidate.count() and candidate.is_visible():
+                    candidate.click(timeout=5000)
+                    page.wait_for_timeout(900)
+                    log.info("Informativa cookie IrenYou: selezionato Rifiuta")
+                    return True
+            except Exception:  # noqa: BLE001
+                continue
+
+    if cookie_notice_found:
+        raise IrenPortalError(
+            "Informativa cookie IrenYou visibile, ma il comando Rifiuta non è stato individuato. "
+            "Screenshot salvato se IREN_DEBUG_SCREENSHOT=true."
+        )
+
+    log.info("Informativa cookie IrenYou non presente")
+    return False
+
+
 def _login_and_open_bills(page, runtime: dict, timeout: int) -> str:
     login_url = runtime.get("iren_login_url") or "https://clienti.irenyou.gruppoiren.it/login"
     bills_url = runtime.get("iren_bills_url") or IREN_BILLS_URL
@@ -243,6 +298,8 @@ def _login_and_open_bills(page, runtime: dict, timeout: int) -> str:
     page.goto(home_url, wait_until="domcontentloaded", timeout=timeout)
     page.goto(bills_url, wait_until="domcontentloaded", timeout=timeout)
     page.wait_for_timeout(1800)
+    _dismiss_cookie_notice(page)
+    page.wait_for_timeout(500)
 
     if "/area-riservata/spese" not in page.url:
         raise IrenPortalError(
