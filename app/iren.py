@@ -394,28 +394,51 @@ def _mark_iren_invoice_click_target(page, portal_id: str) -> dict:
 
 
 def _wait_for_iren_detail_panel(page, timeout: int) -> None:
-    """Wait for the panel heading, choosing the last of the duplicate tab/panel labels.
+    """Wait asynchronously for the inner 'Voci di spesa' heading.
 
-    The IrenYou page renders 'Voci di spesa' twice: once as a tab label and
-    once as the heading inside the panel. A role=tabpanel query is not exposed
-    consistently by this Angular/Material page, while get_by_text().last maps
-    to the panel heading in the observed page DOM.
+    It may not exist immediately after Angular changes the route. Do not call
+    count() first: that would snapshot the DOM before the asynchronous render.
     """
     matches = page.get_by_text(
         re.compile(r"^\s*Voci di spesa\s*$", re.IGNORECASE)
     )
-    count = matches.count()
-    if count == 0:
-        raise IrenPortalError(
-            "Dettaglio fattura aperto, ma non è presente il titolo 'Voci di spesa'"
-        )
-
     panel_heading = matches.last
-    panel_heading.wait_for(state="visible", timeout=timeout)
+    try:
+        panel_heading.wait_for(state="visible", timeout=timeout)
+    except PlaywrightTimeoutError as exc:
+        raise IrenPortalError(
+            "Dettaglio aperto, ma il titolo interno 'Voci di spesa' non è diventato visibile "
+            f"entro {timeout} ms"
+        ) from exc
+
     log.info(
-        "Dettaglio Iren: titolo 'Voci di spesa' individuato (%d occorrenze; uso l'ultima)",
-        count,
+        "Dettaglio Iren: titolo 'Voci di spesa' visibile (%d occorrenze)",
+        matches.count(),
     )
+
+
+def _save_iren_detail_diagnostics(page, output_dir: Path, portal_id: str) -> None:
+    """Save the current page screenshot and visible text after a per-invoice failure."""
+    safe_id = re.sub(r"[^0-9A-Za-z_-]", "", portal_id) or "unknown"
+    screenshot_path = output_dir / f"iren-detail-error-{safe_id}.png"
+    text_path = output_dir / f"iren-detail-error-{safe_id}.txt"
+    try:
+        output_dir.mkdir(parents=True, exist_ok=True)
+        page.screenshot(path=str(screenshot_path), full_page=True)
+        body_text = page.locator("body").inner_text(timeout=5000)
+        text_path.write_text(
+            f"URL: {page.url}\n\n{body_text}",
+            encoding="utf-8",
+        )
+        log.warning(
+            "Diagnostica dettaglio Iren salvata: %s e %s",
+            screenshot_path, text_path,
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.warning(
+            "Salvataggio diagnostica dettaglio Iren non riuscito (%s)",
+            type(exc).__name__,
+        )
 
 def _open_bill_detail(page, invoice: IrenInvoice, timeout: int) -> str:
     target_info = _mark_iren_invoice_click_target(page, invoice.portal_id)
@@ -578,6 +601,8 @@ def sync_iren_invoices(
                         detailed_invoice.due_date or "non rilevata",
                     )
                 except Exception as exc:  # noqa: BLE001
+                    if runtime.get("iren_debug_screenshot"):
+                        _save_iren_detail_diagnostics(page, output_dir, invoice.portal_id)
                     failures.append((invoice.portal_id, str(exc)))
                     log.exception("Download Iren non riuscito per fattura %s", invoice.portal_id)
                 finally:

@@ -306,47 +306,56 @@ def test_iren_detail_url_requires_the_invoice_detail_route():
 
 
 
+
+class FakeLastTextLocator:
+    def __init__(self, owner):
+        self.owner = owner
+        self.wait_arguments = None
+
+    def wait_for(self, state=None, timeout=None):
+        self.wait_arguments = {"state": state, "timeout": timeout}
+        # Simulate Angular rendering the duplicate title after navigation.
+        self.owner.locator_count = 2
+
+
 class FakeDuplicateTextLocator:
     def __init__(self, count):
         self.locator_count = count
-        self.last = FakeLastTextLocator()
+        self.last = FakeLastTextLocator(self)
 
     def count(self):
         return self.locator_count
 
 
-class FakeLastTextLocator:
-    def __init__(self):
-        self.wait_arguments = None
-
-    def wait_for(self, state=None, timeout=None):
-        self.wait_arguments = {"state": state, "timeout": timeout}
-
-
 class FakeDuplicateTextPage:
     def __init__(self, count):
         self.locator = FakeDuplicateTextLocator(count)
-        self.pattern = None
 
     def get_by_text(self, pattern):
-        self.pattern = pattern
         return self.locator
 
 
-def test_detail_wait_uses_last_duplicate_voci_di_spesa_heading():
-    page = FakeDuplicateTextPage(count=2)
+def test_detail_wait_waits_for_title_even_when_it_is_not_in_dom_yet():
+    page = FakeDuplicateTextPage(count=0)
+
+    _wait_for_iren_detail_panel(page, timeout=12000)
+
+    assert page.locator.last.wait_arguments == {"state": "visible", "timeout": 12000}
+    assert page.locator.count() == 2
+
+
+def test_detail_wait_logs_duplicate_titles_after_dynamic_render():
+    page = FakeDuplicateTextPage(count=1)
 
     _wait_for_iren_detail_panel(page, timeout=12000)
 
     assert page.locator.last.wait_arguments == {"state": "visible", "timeout": 12000}
 
 
-def test_detail_wait_reports_missing_voci_di_spesa_heading():
+def test_detail_wait_does_not_preemptively_fail_when_title_not_yet_present():
+    # The locator is expected to wait; it must not be rejected from a count() snapshot.
     page = FakeDuplicateTextPage(count=0)
 
-    try:
-        _wait_for_iren_detail_panel(page, timeout=12000)
-    except IrenPortalError as exc:
-        assert "non è presente il titolo" in str(exc)
-    else:
-        raise AssertionError("L'assenza del titolo deve generare un errore chiaro")
+    _wait_for_iren_detail_panel(page, timeout=12000)
+
+    assert page.locator.last.wait_arguments is not None
