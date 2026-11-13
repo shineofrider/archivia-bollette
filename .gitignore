@@ -1,0 +1,11 @@
+.env
+.env.*
+!.env.example
+config/secrets.yaml
+data/
+logs/
+*.sqlite
+*.sqlite3
+playwright/.auth/
+__pycache__/
+*.py[cod]
