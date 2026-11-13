@@ -12,6 +12,17 @@ from .notifications import HomeAssistantNotifier
 log = logging.getLogger(__name__)
 ALPERIA_SUBJECT_PREFIX = "Nuova fattura disponibile"
 
+# A forced test execution is granted once per container process, not once forever
+# in SQLite. Restarting the container allows another controlled attempt.
+_FORCED_TEST_ATTEMPTS: set[str] = set()
+
+
+def _claim_test_force_once(message_key: str) -> bool:
+    if message_key in _FORCED_TEST_ATTEMPTS:
+        return False
+    _FORCED_TEST_ATTEMPTS.add(message_key)
+    return True
+
 
 def _safe_name(name: str) -> str:
     return Path(name or "allegato.pdf").name.replace("\x00", "")
@@ -239,8 +250,14 @@ def process_cycle(config: dict) -> None:
                     continue
 
                 force_granted = (
-                    test_mode == "process" and force_test and database.claim_test_force(item.key)
+                    test_mode == "process" and force_test and _claim_test_force_once(item.key)
                 )
+                if test_mode == "process" and force_test and not force_granted:
+                    log.warning(
+                        "TEST_FORCE_REPROCESS già utilizzata per UID %s in questo avvio; "
+                        "riavviare il container per un nuovo tentativo controllato",
+                        item.uid,
+                    )
                 if status == "done" and not force_granted:
                     log.info("%s UID %s già completata: salto", provider.capitalize(), item.uid)
                     continue

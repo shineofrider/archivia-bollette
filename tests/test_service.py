@@ -2,6 +2,7 @@ from datetime import datetime, timezone
 from email.message import EmailMessage
 
 from app.mail import MailItem
+from app import service
 from app.service import _matching_provider
 
 
@@ -54,3 +55,15 @@ def test_alperia_sender_must_match_exactly():
 def test_iren_subject_remains_exact_match():
     item = make_item("noreply@mail.clienti.irenyou.gruppoiren.it", "Emissione Bolletta")
     assert _matching_provider(item, PROVIDERS)[0] == "iren"
+
+
+
+def test_forced_process_can_be_retried_after_container_restart(monkeypatch):
+    monkeypatch.setattr(service, "_FORCED_TEST_ATTEMPTS", set())
+
+    assert service._claim_test_force_once("iren-message") is True
+    assert service._claim_test_force_once("iren-message") is False
+
+    # A new container process starts with a fresh in-memory latch.
+    monkeypatch.setattr(service, "_FORCED_TEST_ATTEMPTS", set())
+    assert service._claim_test_force_once("iren-message") is True

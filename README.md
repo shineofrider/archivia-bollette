@@ -158,7 +158,7 @@ Per provare una singola email:
 
 Per Iren usare TEST_PROVIDER=iren e l'UID della notifica Iren. Il test process esegue l'accesso al portale se IREN_AUTOMATION_ENABLED=true e può archiviare realmente i PDF.
 
-Per richiedere un singolo tentativo forzato anche su un messaggio già completato o in attesa del retry, impostare TEST_FORCE_REPROCESS=true. Il permesso viene registrato in SQLite e concesso una sola volta per quel messaggio. La deduplicazione SHA-256 resta attiva.
+Per richiedere un singolo tentativo forzato anche su un messaggio già completato o in attesa del retry, impostare TEST_FORCE_REPROCESS=true. La forzatura viene concessa una sola volta per UID durante l'avvio corrente del container; per un ulteriore tentativo, riavviare il container mantenendo la modalità process. La deduplicazione SHA-256 resta attiva.
 
 Terminata la prova, ripristina sempre:
 
