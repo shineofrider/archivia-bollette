@@ -394,17 +394,28 @@ def _mark_iren_invoice_click_target(page, portal_id: str) -> dict:
 
 
 def _wait_for_iren_detail_panel(page, timeout: int) -> None:
-    """Wait for the Voci di spesa tabpanel, not the tab label with the same name."""
-    panel = page.get_by_role(
-        "tabpanel",
-        name=re.compile(r"^\s*Voci di spesa\s*$", re.IGNORECASE),
-    ).first
-    if not panel.count():
-        raise IrenPortalError(
-            "Dettaglio fattura aperto, ma il pannello 'Voci di spesa' non è presente"
-        )
-    panel.wait_for(state="visible", timeout=timeout)
+    """Wait for the panel heading, choosing the last of the duplicate tab/panel labels.
 
+    The IrenYou page renders 'Voci di spesa' twice: once as a tab label and
+    once as the heading inside the panel. A role=tabpanel query is not exposed
+    consistently by this Angular/Material page, while get_by_text().last maps
+    to the panel heading in the observed page DOM.
+    """
+    matches = page.get_by_text(
+        re.compile(r"^\s*Voci di spesa\s*$", re.IGNORECASE)
+    )
+    count = matches.count()
+    if count == 0:
+        raise IrenPortalError(
+            "Dettaglio fattura aperto, ma non è presente il titolo 'Voci di spesa'"
+        )
+
+    panel_heading = matches.last
+    panel_heading.wait_for(state="visible", timeout=timeout)
+    log.info(
+        "Dettaglio Iren: titolo 'Voci di spesa' individuato (%d occorrenze; uso l'ultima)",
+        count,
+    )
 
 def _open_bill_detail(page, invoice: IrenInvoice, timeout: int) -> str:
     target_info = _mark_iren_invoice_click_target(page, invoice.portal_id)
