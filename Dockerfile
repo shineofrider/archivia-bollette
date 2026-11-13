@@ -8,8 +8,9 @@ WORKDIR /app
 
 LABEL org.opencontainers.image.source="https://github.com/shineofrider/archivia-bollette"
 
+# libatomic1 is needed by Playwright's bundled Node runtime.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates tzdata \
+    && apt-get install -y --no-install-recommends ca-certificates tzdata libatomic1 \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt /app/requirements.txt
