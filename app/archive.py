@@ -28,6 +28,25 @@ class PdfArchiver:
         self.database = database
         self.config = config
 
+    @staticmethod
+    def _write_atomic(target: Path, content: bytes) -> None:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if target.exists():
+            raise FileExistsError(f"Il percorso esiste già; nessun file sovrascritto: {target}")
+        temp = target.with_suffix(target.suffix + ".part")
+        try:
+            with temp.open("xb") as handle:
+                handle.write(content)
+                handle.flush()
+                os.fsync(handle.fileno())
+            # Do not replace a file that appeared while the temporary file was written.
+            if target.exists():
+                raise FileExistsError(f"Il percorso è stato creato durante il salvataggio: {target}")
+            temp.rename(target)
+        finally:
+            if temp.exists():
+                temp.unlink(missing_ok=True)
+
     def save(
         self, provider: str, subdir: str, filename: str, content: bytes,
         email_date, message_key: str,
@@ -40,7 +59,26 @@ class PdfArchiver:
         digest = hashlib.sha256(content).hexdigest()
         known = self.database.find_document(digest)
         if known:
-            return ArchiveResult(Path(known["path"]), year, month, digest, True, period_source)
+            known_path = Path(known["path"])
+            if known_path.is_file():
+                existing_digest = hashlib.sha256(known_path.read_bytes()).hexdigest()
+                if existing_digest == digest:
+                    return ArchiveResult(known_path, year, month, digest, True, period_source)
+                raise FileExistsError(
+                    f"Il database associa il PDF a {known_path}, ma il contenuto del file è diverso; "
+                    "non sovrascrivo il documento."
+                )
+            if known_path.exists():
+                raise FileExistsError(
+                    f"Il percorso registrato nel database non è un file regolare: {known_path}"
+                )
+
+            log.warning(
+                "PDF già registrato nel database ma file assente; ripristino il documento in %s",
+                known_path,
+            )
+            self._write_atomic(known_path, content)
+            return ArchiveResult(known_path, year, month, digest, False, period_source)
 
         target_dir = self.archive_root / subdir
         target_dir.mkdir(parents=True, exist_ok=True)
@@ -62,17 +100,7 @@ class PdfArchiver:
                     f"Esiste già una versione alternativa per {year:04d}_{month:02d}; nessun file sovrascritto"
                 )
 
-        temp = target.with_suffix(target.suffix + ".part")
-        try:
-            with temp.open("wb") as handle:
-                handle.write(content)
-                handle.flush()
-                os.fsync(handle.fileno())
-            temp.replace(target)
-        finally:
-            if temp.exists():
-                temp.unlink(missing_ok=True)
-
+        self._write_atomic(target, content)
         self.database.add_document(
             digest, provider, f"{year:04d}_{month:02d}", str(target), filename, message_key
         )
