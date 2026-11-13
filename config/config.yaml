@@ -1,35 +1,35 @@
-archive:
-  electricity:
-    provider: Alperia
-    directory: /archive/Corrente
-    filename: "{year}_{month:02d}.pdf"
+mail:
+  folder: INBOX
+  poll_interval_seconds: 300
+  lookback_days: 730
+
+providers:
+  alperia:
     sender: noreply@alperia.eu
     subject_regex: '^Nuova fattura disponibile Nr\.\s*.+$'
-  gas:
-    provider: Iren
-    directory: /archive/Gas
-    filename: "{year}_{month:02d}.pdf"
+    archive_subdir: Corrente
+  iren:
     sender: noreply@mail.clienti.irenyou.gruppoiren.it
-    subject: "Emissione Bolletta"
+    subject_exact: Emissione Bolletta
+    archive_subdir: Gas
 
-mail:
-  poll_interval_seconds: 300
-  mark_processed_only_after_success: true
-  download_attachments: true
+archive:
+  filename_format: '{year:04d}_{month:02d}.pdf'
+  collision_suffix: '_versione_{digest8}'
+  fallback_to_email_month: true
+
+gmail:
+  host: imap.gmail.com
+  port: 993
 
 iren:
-  trigger_only_from_matching_email: true
-  automation_enabled_from_env: IREN_AUTOMATION_ENABLED
-  login_url: "https://www.irenyou.gruppoiren.it/"
-  # Browser selectors and download workflow must be verified against
-  # the authenticated customer portal before enabling.
+  login_url: https://clienti.irenyou.gruppoiren.it/
+  headless: true
+  navigation_timeout_ms: 45000
+  download_timeout_ms: 45000
 
 notifications:
-  home_assistant:
-    enabled_from_env: HA_WEBHOOK_URL
-
-database:
-  path: /data/bollette.sqlite3
+  enabled: true
 
 logging:
   level: INFO
