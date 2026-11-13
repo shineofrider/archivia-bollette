@@ -1,1 +1,1 @@
-"""Archivia Bollette application package."""
+"""Archivia Bollette."""
