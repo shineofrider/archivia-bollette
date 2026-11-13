@@ -243,3 +243,45 @@ Scadenza 24.11.2026"""
 
     assert invoice is not None
     assert invoice.portal_id == "502614099672"
+
+
+
+def test_iren_invoice_list_parser_handles_all_cards_when_dom_text_is_flattened():
+    # Chromium can return adjacent cards without line breaks between their text nodes.
+    page_text = (
+        "Bolletta Scarica storico bollette .csv "
+        "Fattura n° .502614099672 Contratto N°15122474 Cliente "
+        "28,16 € Scadenza 24.11.2026 ADDEBITO DIRETTO SU C/C "
+        "Fattura n° .502612842851 Contratto N°15122474 Cliente "
+        "25,75 € Scadenza 23.10.2026 PAGATA "
+        "Fattura n° .502611542121 Contratto N°15122474 Cliente "
+        "22,65 € Scadenza 23.09.2026 PAGATA "
+        "Fattura n° .502610154260 Contratto N°15122474 Cliente "
+        "23,68 € Scadenza 25.08.2026 PAGATA"
+    )
+
+    invoices = parse_iren_invoice_list_text(page_text)
+
+    assert [invoice.portal_id for invoice in invoices] == [
+        "502614099672",
+        "502612842851",
+        "502611542121",
+        "502610154260",
+    ]
+    assert [invoice.amount for invoice in invoices] == [
+        "28,16 €", "25,75 €", "22,65 €", "23,68 €"
+    ]
+    assert [invoice.due_date for invoice in invoices] == [
+        "2026-11-24", "2026-10-23", "2026-09-23", "2026-08-25"
+    ]
+
+
+def test_iren_invoice_id_parser_tolerates_unicode_spaces_and_dot_before_number():
+    card = "Fattura n°\u00a0.\u202f502614099672 Contratto N°15122474 28,16 € Scadenza 24.11.2026"
+
+    invoice = parse_iren_invoice_card(card)
+
+    assert invoice is not None
+    assert invoice.portal_id == "502614099672"
+    assert invoice.amount == "28,16 €"
+    assert invoice.due_date == "2026-11-24"

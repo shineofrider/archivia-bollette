@@ -68,30 +68,13 @@ def _iso_date(value: str) -> str:
 
 
 def _extract_iren_portal_id(text: str) -> str:
-    """Extract the digits immediately following a 'Fattura n' heading.
-
-    IrenYou renders punctuation and spacing around the identifier inconsistently
-    (for example 'Fattura n° .5026…'); normalize by collecting digits from the
-    heading line instead of relying on one exact punctuation pattern.
-    """
-    lines = text.splitlines()
-    for index, line in enumerate(lines):
-        heading = re.search(r"fattura\s*n", line, flags=re.IGNORECASE)
-        if not heading:
-            continue
-
-        candidates = [line[heading.end():]]
-        candidates.extend(lines[index + 1:index + 3])
-        for candidate in candidates:
-            digits = "".join(character for character in candidate if character.isdigit())
-            if 6 <= len(digits) <= 22:
-                return digits
-            # If the heading line contains a smaller numeric fragment, prefer the
-            # first contiguous long identifier on the following line.
-            long_match = re.search(r"\d{6,22}", candidate)
-            if long_match:
-                return long_match.group(0)
-    return ""
+    """Extract the continuous numeric identifier following a 'Fattura n' heading."""
+    match = re.search(
+        r"Fattura\s*n[^\d]{0,40}(\d{6,22})",
+        text,
+        flags=re.IGNORECASE,
+    )
+    return match.group(1) if match else ""
 
 
 def parse_iren_invoice_card(text: str) -> IrenInvoice | None:
@@ -159,18 +142,18 @@ def parse_iren_invoice_detail(text: str, invoice: IrenInvoice) -> IrenInvoice:
 
 
 def parse_iren_invoice_list_text(text: str) -> list[IrenInvoice]:
-    """Split page text at each invoice heading and parse the visible bill cards."""
-    lines = text.splitlines()
-    starts = [
-        index for index, line in enumerate(lines)
-        if re.search(r"Fattura\s*n", line, flags=re.IGNORECASE)
-    ]
+    """Split the page text at every invoice title, even when the browser returns one long line."""
+    starts = list(re.finditer(
+        r"Fattura\s*n[^\d]{0,40}\d{6,22}",
+        text,
+        flags=re.IGNORECASE,
+    ))
 
     invoices: list[IrenInvoice] = []
     seen_ids: set[str] = set()
-    for position, start_line in enumerate(starts):
-        end_line = starts[position + 1] if position + 1 < len(starts) else len(lines)
-        card_text = "\n".join(lines[start_line:end_line]).strip()
+    for index, match in enumerate(starts):
+        block_end = starts[index + 1].start() if index + 1 < len(starts) else len(text)
+        card_text = text[match.start():block_end].strip()
         invoice = parse_iren_invoice_card(card_text)
         if invoice and invoice.portal_id not in seen_ids:
             seen_ids.add(invoice.portal_id)
@@ -178,25 +161,43 @@ def parse_iren_invoice_list_text(text: str) -> list[IrenInvoice]:
 
     return sort_iren_invoices_newest_first(invoices)
 
-def extract_iren_invoice_cards(page) -> list[IrenInvoice]:
+
+def extract_iren_invoice_cards(page, debug_text_path: Path | None = None) -> list[IrenInvoice]:
     """Read invoice cards from visible page text, independently of generated CSS classes."""
     page_text = page.locator("body").inner_text(timeout=10000)
+
+    # When debug mode is enabled, retain the exact DOM-visible text next to the screenshot.
+    # This lets us diagnose spacing/Unicode changes without dumping customer data in container logs.
+    if debug_text_path is not None:
+        try:
+            debug_text_path.parent.mkdir(parents=True, exist_ok=True)
+            debug_text_path.write_text(page_text, encoding="utf-8")
+            log.warning("Testo pagina Iren salvato per diagnosi in %s", debug_text_path)
+        except OSError as exc:
+            log.warning("Impossibile salvare il testo diagnostico Iren (%s)", type(exc).__name__)
+
     invoices = parse_iren_invoice_list_text(page_text)
 
     if not invoices:
-        # Keep the diagnostic useful without logging the customer's name/address or full card contents.
         heading_count = len(re.findall(r"Fattura\s*n", page_text, flags=re.IGNORECASE))
+        heading_samples = [
+            repr(page_text[m.start():m.start() + 90])
+            for m in list(re.finditer(r"Fattura\s*n", page_text, flags=re.IGNORECASE))[:4]
+        ]
         log.error(
-            "Pagina Spese caricata ma parser fatture senza risultati: titoli_fattura=%d, testo_pagina=%d caratteri",
-            heading_count, len(page_text),
+            "Pagina Spese caricata ma parser fatture senza risultati: titoli_fattura=%d, "
+            "testo_pagina=%d caratteri, campioni_titolo=%s",
+            heading_count, len(page_text), heading_samples,
         )
         raise IrenPortalError(
             "La pagina Spese è visibile, ma non riesco a interpretare le schede delle fatture. "
-            "Screenshot salvato se IREN_DEBUG_SCREENSHOT=true."
+            "Screenshot e testo diagnostico salvati se IREN_DEBUG_SCREENSHOT=true."
         )
 
-    log.info("Riconosciute %d fatture nella pagina Spese: %s",
-             len(invoices), [invoice.portal_id for invoice in invoices])
+    log.info(
+        "Riconosciute %d fatture nella pagina Spese: %s",
+        len(invoices), [invoice.portal_id for invoice in invoices],
+    )
     return invoices
 
 def _dismiss_cookie_notice(page) -> bool:
@@ -412,7 +413,10 @@ def sync_iren_invoices(
             page = browser.pages[0] if browser.pages else browser.new_page()
             page.set_default_timeout(timeout)
             bills_url = _login_and_open_bills(page, runtime, timeout)
-            invoices = extract_iren_invoice_cards(page)
+            invoices = extract_iren_invoice_cards(
+                page,
+                output_dir / "iren-page-text.txt" if runtime.get("iren_debug_screenshot") else None,
+            )
 
             if not baseline_initialized:
                 selected = invoices[:1]
