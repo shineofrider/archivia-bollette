@@ -1,0 +1,35 @@
+archive:
+  electricity:
+    provider: Alperia
+    directory: /archive/Corrente
+    filename: "{year}_{month:02d}.pdf"
+    sender: noreply@alperia.eu
+    subject_regex: '^Nuova fattura disponibile Nr\.\s*.+$'
+  gas:
+    provider: Iren
+    directory: /archive/Gas
+    filename: "{year}_{month:02d}.pdf"
+    sender: noreply@mail.clienti.irenyou.gruppoiren.it
+    subject: "Emissione Bolletta"
+
+mail:
+  poll_interval_seconds: 300
+  mark_processed_only_after_success: true
+  download_attachments: true
+
+iren:
+  trigger_only_from_matching_email: true
+  automation_enabled_from_env: IREN_AUTOMATION_ENABLED
+  login_url: "https://www.irenyou.gruppoiren.it/"
+  # Browser selectors and download workflow must be verified against
+  # the authenticated customer portal before enabling.
+
+notifications:
+  home_assistant:
+    enabled_from_env: HA_WEBHOOK_URL
+
+database:
+  path: /data/bollette.sqlite3
+
+logging:
+  level: INFO
