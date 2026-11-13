@@ -1,0 +1,18 @@
+# Import this automation in Home Assistant and replace the webhook_id with a
+# unique value generated in Settings > Automations & scenes > Webhook trigger.
+- id: archivia_bollette_notification
+  alias: "Archivia Bollette - Notifiche"
+  description: "Riceve gli eventi di Archivia Bollette dal container OMV."
+  mode: queued
+  triggers:
+    - trigger: webhook
+      webhook_id: SOSTITUISCI_CON_UN_WEBHOOK_ID_CASUALE
+      allowed_methods:
+        - POST
+      local_only: true
+  actions:
+    - action: persistent_notification.create
+      data:
+        title: "{{ trigger.json.title | default('Archivia Bollette') }}"
+        message: "{{ trigger.json.message | default('Evento ricevuto dal servizio bollette.') }}"
+        notification_id: archivia_bollette
