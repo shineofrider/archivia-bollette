@@ -209,3 +209,37 @@ Informativa Privacy"""
 
 def test_parse_iren_invoice_list_text_returns_empty_when_no_cards_exist():
     assert parse_iren_invoice_list_text("Bolletta\nNessuna fattura disponibile") == []
+
+
+
+def test_parse_iren_invoice_list_handles_dot_and_unusual_whitespace_before_number():
+    page_text = """Bolletta
+Fattura n°.502614099672
+Contratto N°15122474
+28,16 €
+Scadenza 24.11.2026
+Fattura n°\u00a0.\u202f502612842851
+Contratto N°15122474
+25,75 €
+Scadenza 23.10.2026"""
+
+    invoices = parse_iren_invoice_list_text(page_text)
+
+    assert [invoice.portal_id for invoice in invoices] == [
+        "502614099672", "502612842851"
+    ]
+    assert [invoice.amount for invoice in invoices] == ["28,16 €", "25,75 €"]
+    assert [invoice.due_date for invoice in invoices] == ["2026-11-24", "2026-10-23"]
+
+
+def test_parse_iren_invoice_card_handles_identifier_on_line_after_heading():
+    card = """Fattura n°
+.502614099672
+Contratto N°15122474
+28,16 €
+Scadenza 24.11.2026"""
+
+    invoice = parse_iren_invoice_card(card)
+
+    assert invoice is not None
+    assert invoice.portal_id == "502614099672"

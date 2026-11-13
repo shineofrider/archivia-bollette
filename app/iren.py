@@ -67,22 +67,41 @@ def _iso_date(value: str) -> str:
     return ""
 
 
+def _extract_iren_portal_id(text: str) -> str:
+    """Extract the digits immediately following a 'Fattura n' heading.
+
+    IrenYou renders punctuation and spacing around the identifier inconsistently
+    (for example 'Fattura n° .5026…'); normalize by collecting digits from the
+    heading line instead of relying on one exact punctuation pattern.
+    """
+    lines = text.splitlines()
+    for index, line in enumerate(lines):
+        heading = re.search(r"fattura\s*n", line, flags=re.IGNORECASE)
+        if not heading:
+            continue
+
+        candidates = [line[heading.end():]]
+        candidates.extend(lines[index + 1:index + 3])
+        for candidate in candidates:
+            digits = "".join(character for character in candidate if character.isdigit())
+            if 6 <= len(digits) <= 22:
+                return digits
+            # If the heading line contains a smaller numeric fragment, prefer the
+            # first contiguous long identifier on the following line.
+            long_match = re.search(r"\d{6,22}", candidate)
+            if long_match:
+                return long_match.group(0)
+    return ""
+
+
 def parse_iren_invoice_card(text: str) -> IrenInvoice | None:
     """Extract the stable card id, amount and due date from one bill-list card."""
-    match = re.search(
-        r"Fattura\s*n\s*[°ºo]?\s*[.:#-]?\s*([0-9][0-9 ./-]{4,})",
-        text,
-        flags=re.IGNORECASE,
-    )
-    if not match:
-        return None
-
-    portal_id = re.sub(r"\D", "", match.group(1))
-    if not 6 <= len(portal_id) <= 22:
+    portal_id = _extract_iren_portal_id(text)
+    if not portal_id:
         return None
 
     amount_match = re.search(
-        r"([0-9]{1,3}(?:[. ][0-9]{3})*(?:,[0-9]{2}|[.][0-9]{2})|[0-9]+,[0-9]{2})\s*€",
+        r"([0-9]{1,3}(?:[. \u00a0\u202f][0-9]{3})*(?:,[0-9]{2}|[.][0-9]{2})|[0-9]+,[0-9]{2})\s*€",
         text,
     )
     amount = f"{amount_match.group(1).strip()} €" if amount_match else ""
@@ -100,7 +119,6 @@ def parse_iren_invoice_card(text: str) -> IrenInvoice | None:
         due_date=due_date,
         card_text=text[:1000],
     )
-
 
 def sort_iren_invoices_newest_first(invoices: list[IrenInvoice]) -> list[IrenInvoice]:
     """Use the due date shown in the list; preserve portal order where dates are absent/equal."""
@@ -141,29 +159,24 @@ def parse_iren_invoice_detail(text: str, invoice: IrenInvoice) -> IrenInvoice:
 
 
 def parse_iren_invoice_list_text(text: str) -> list[IrenInvoice]:
-    """Split the visible IrenYou page text into invoice blocks and parse each one.
+    """Split page text at each invoice heading and parse the visible bill cards."""
+    lines = text.splitlines()
+    starts = [
+        index for index, line in enumerate(lines)
+        if re.search(r"Fattura\s*n", line, flags=re.IGNORECASE)
+    ]
 
-    The portal's card markup is dynamically generated and may vary between releases.
-    The visible text is more stable: every card starts with "Fattura n°".
-    """
-    starts = list(re.finditer(
-        r"Fattura\s*n\s*[°ºo]?\s*[.:#-]?\s*(?=[0-9])",
-        text,
-        flags=re.IGNORECASE,
-    ))
     invoices: list[IrenInvoice] = []
     seen_ids: set[str] = set()
-
-    for index, match in enumerate(starts):
-        block_end = starts[index + 1].start() if index + 1 < len(starts) else len(text)
-        card_text = text[match.start():block_end].strip()
+    for position, start_line in enumerate(starts):
+        end_line = starts[position + 1] if position + 1 < len(starts) else len(lines)
+        card_text = "\n".join(lines[start_line:end_line]).strip()
         invoice = parse_iren_invoice_card(card_text)
         if invoice and invoice.portal_id not in seen_ids:
             seen_ids.add(invoice.portal_id)
             invoices.append(invoice)
 
     return sort_iren_invoices_newest_first(invoices)
-
 
 def extract_iren_invoice_cards(page) -> list[IrenInvoice]:
     """Read invoice cards from visible page text, independently of generated CSS classes."""
