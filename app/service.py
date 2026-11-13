@@ -85,7 +85,7 @@ def _iren_notification_details(invoice) -> tuple[str, dict[str, str]]:
     if invoice.portal_id:
         extra["portal_invoice_id"] = invoice.portal_id
 
-    return "\\n".join(lines), extra
+    return "\n".join(lines), extra
 
 
 def _archive_pdf(
@@ -114,7 +114,7 @@ def _archive_pdf(
     if result.period_source == "data-email-fallback":
         message += " (periodo non letto dal PDF: utilizzata la data dell'email)"
     if notification_suffix:
-        message += "\\n" + notification_suffix
+        message += "\n" + notification_suffix
     notifier.send(
         "Nuova bolletta archiviata", message, provider=provider,
         period=period, file=str(result.path), status="archiviata",
