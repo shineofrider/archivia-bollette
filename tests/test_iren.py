@@ -3,6 +3,7 @@ from app.iren import (
     IrenPortalError,
     _dismiss_cookie_notice,
     _wait_for_iren_detail_panel,
+    _wait_for_iren_actions_menu,
     _is_iren_detail_url,
     parse_iren_invoice_card,
     parse_iren_invoice_detail,
@@ -370,3 +371,49 @@ def test_detail_wait_does_not_fail_before_angular_adds_panel_heading():
 
     assert page.locator.requested_index == 1
     assert page.locator.count() == 2
+
+
+
+class FakeVisibleActionLocator:
+    def __init__(self):
+        self.wait_arguments = None
+        self.clicked = False
+
+    def wait_for(self, state=None, timeout=None):
+        self.wait_arguments = {"state": state, "timeout": timeout}
+
+    def click(self):
+        self.clicked = True
+
+
+class FakeActionMatches:
+    def __init__(self, locator):
+        self.last = locator
+
+
+class FakeActionPage:
+    def __init__(self):
+        self.action = FakeVisibleActionLocator()
+        self.pattern = None
+
+    def get_by_text(self, pattern):
+        self.pattern = pattern
+        return FakeActionMatches(self.action)
+
+
+def test_iren_actions_menu_waits_for_visible_control():
+    page = FakeActionPage()
+
+    actions = _wait_for_iren_actions_menu(page, timeout=15000)
+
+    assert actions is page.action
+    assert actions.wait_arguments == {"state": "visible", "timeout": 15000}
+
+
+def test_iren_actions_menu_locator_is_used_as_click_target():
+    page = FakeActionPage()
+
+    actions = _wait_for_iren_actions_menu(page, timeout=10000)
+    actions.click()
+
+    assert actions.clicked is True

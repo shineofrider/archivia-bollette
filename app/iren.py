@@ -482,23 +482,28 @@ def _open_bill_detail(page, invoice: IrenInvoice, timeout: int) -> str:
         )
 
     _wait_for_iren_detail_panel(page, timeout)
-    detail_text = page.locator("body").inner_text(timeout=10000)
-    if not re.search(r"Azioni", detail_text, flags=re.IGNORECASE):
+    _wait_for_iren_actions_menu(page, timeout)
+    return page.locator("body").inner_text(timeout=10000)
+
+def _wait_for_iren_actions_menu(page, timeout: int):
+    """Wait for the visible Azioni menu trigger after the detail page has rendered."""
+    actions = page.get_by_text(
+        re.compile(r"^\s*Azioni\s*$", re.IGNORECASE)
+    ).last
+    try:
+        actions.wait_for(state="visible", timeout=timeout)
+    except PlaywrightTimeoutError as exc:
         raise IrenPortalError(
-            f"Fattura {invoice.portal_id}: raggiunto il dettaglio ma il menu Azioni non compare"
-        )
-    return detail_text
+            f"Menu Azioni non è diventato visibile entro {timeout} ms nella pagina dettaglio"
+        ) from exc
+    log.info("Dettaglio Iren: menu Azioni visibile")
+    return actions
+
 
 def _download_from_detail(
     page, invoice: IrenInvoice, output_dir: Path, download_timeout: int
 ) -> tuple[bytes, str]:
-    actions = page.get_by_text(re.compile(r"^\s*Azioni\s*$", re.IGNORECASE)).first
-    if not actions.count():
-        actions = page.get_by_role("button", name=re.compile(r"^\s*Azioni\s*$", re.IGNORECASE)).first
-    if not actions.count():
-        raise IrenPortalError(
-            f"Fattura {invoice.portal_id}: menu Azioni non individuato nel dettaglio"
-        )
+    actions = _wait_for_iren_actions_menu(page, min(download_timeout, 15000))
     actions.click()
 
     download_action = page.get_by_text(
