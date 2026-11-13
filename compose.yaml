@@ -1,0 +1,22 @@
+services:
+  archivia-bollette:
+    image: ghcr.io/shineofrider/archivia-bollette:latest
+    container_name: archivia-bollette
+    restart: unless-stopped
+    init: true
+    environment:
+      TZ: ${TZ:-Europe/Rome}
+      CONFIG_FILE: /config/config.yaml
+      DATA_DIR: /data
+      ARCHIVE_DIR: /archive
+    env_file:
+      - .env
+    volumes:
+      - ./config:/config:ro
+      - ./data:/data
+      - /srv/dev-disk-by-uuid-4f71b583-cef3-4261-ac1a-dad3a9057bb9/Documenti/Casa/Bollette:/archive
+    shm_size: "1gb"
+    security_opt:
+      - no-new-privileges:true
+    # Browser automation (Iren) will run in this container only after
+    # an Iren notification email is detected. No ports are published.
