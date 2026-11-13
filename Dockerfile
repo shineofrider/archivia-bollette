@@ -6,10 +6,22 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-# Browser dependencies are installed in the image, not on the OMV host.
-RUN pip install --no-cache-dir playwright pyyaml imapclient requests pypdf
-RUN python -m playwright install --with-deps chromium
+LABEL org.opencontainers.image.source="https://github.com/shineofrider/archivia-bollette"
 
-COPY . /app
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates tzdata \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt /app/requirements.txt
+RUN pip install --no-cache-dir -r /app/requirements.txt \
+    && python -m playwright install --with-deps chromium \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY app /app/app
+COPY config/config.yaml /config/config.yaml
+
+RUN mkdir -p /data /archive/Corrente /archive/Gas /tmp/iren \
+    && chmod 755 /app
 
 CMD ["python", "-m", "app"]
