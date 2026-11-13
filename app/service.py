@@ -5,7 +5,7 @@ from pathlib import Path
 
 from .archive import PdfArchiver
 from .database import Database
-from .iren import sync_iren_invoices
+from .iren import IrenInvoice, sync_iren_invoices
 from .mail import GmailImapClient, MailItem
 from .notifications import HomeAssistantNotifier
 
@@ -15,6 +15,7 @@ ALPERIA_SUBJECT_PREFIX = "Nuova fattura disponibile"
 # A forced test execution is granted once per container process, not once forever
 # in SQLite. Restarting the container allows another controlled attempt.
 _FORCED_TEST_ATTEMPTS: set[str] = set()
+_NOTIFICATION_TEST_SENT: set[str] = set()
 
 
 def _claim_test_force_once(message_key: str) -> bool:
@@ -22,6 +23,44 @@ def _claim_test_force_once(message_key: str) -> bool:
         return False
     _FORCED_TEST_ATTEMPTS.add(message_key)
     return True
+
+
+def _send_notification_test(notifier: HomeAssistantNotifier, provider: str = "iren") -> bool:
+    """Send a one-shot sample notification without Gmail, Playwright, or file changes."""
+    if provider != "iren":
+        raise ValueError("La modalità notify è attualmente disponibile per TEST_PROVIDER=iren")
+
+    if provider in _NOTIFICATION_TEST_SENT:
+        log.info("Notifica di test Iren già inviata in questo avvio: non ripeto l'invio")
+        return True
+
+    sample_invoice = IrenInvoice(
+        portal_id="502614099672",
+        invoice_number="38502614099672",
+        amount="28,16 €",
+        issue_date="2026-11-09",
+        due_date="2026-11-24",
+    )
+    details, extra = _iren_notification_details(sample_invoice)
+    message = (
+        "NOTIFICA DI PROVA — nessuna bolletta è stata scaricata o archiviata.\n"
+        + details
+    )
+    sent = notifier.send(
+        "TEST - Bolletta Iren",
+        message,
+        provider="iren",
+        period="2026_11",
+        status="test",
+        test=True,
+        **extra,
+    )
+    if sent:
+        _NOTIFICATION_TEST_SENT.add(provider)
+        log.info("Notifica di test Iren inviata correttamente a Home Assistant")
+    else:
+        log.error("Notifica di test Iren non inviata: verificare HA_WEBHOOK_URL e i log")
+    return sent
 
 
 def _safe_name(name: str) -> str:
@@ -217,12 +256,16 @@ def process_cycle(config: dict) -> None:
     test_provider = str(runtime.get("test_provider", "all")).strip().lower()
     test_uid = str(runtime.get("test_uid", "")).strip()
     force_test = bool(runtime.get("test_force_reprocess", False))
-    if test_mode not in {"off", "scan", "process"}:
-        raise ValueError("TEST_MODE deve essere off, scan oppure process")
+    if test_mode not in {"off", "scan", "process", "notify"}:
+        raise ValueError("TEST_MODE deve essere off, scan, process oppure notify")
     if test_provider not in {"all", "alperia", "iren"}:
         raise ValueError("TEST_PROVIDER deve essere all, alperia oppure iren")
     if test_mode == "process" and not test_uid:
         log.error("TEST_MODE=process richiede TEST_UID: non elaboro nessuna email")
+        return
+
+    if test_mode == "notify":
+        _send_notification_test(notifier, test_provider)
         return
 
     if not runtime.get("imap_username") or not runtime.get("imap_password"):

@@ -158,6 +158,15 @@ Per provare una singola email:
 
 Per Iren usare TEST_PROVIDER=iren e l'UID della notifica Iren. Il test process esegue l'accesso al portale se IREN_AUTOMATION_ENABLED=true e può archiviare realmente i PDF.
 
+Per testare soltanto la notifica Home Assistant senza scaricare o archiviare documenti, impostare:
+
+       TEST_MODE=notify
+       TEST_PROVIDER=iren
+       TEST_UID=
+       TEST_FORCE_REPROCESS=false
+
+La modalità invia una sola notifica di esempio per avvio del container, con importo 28,16 €, scadenza 24/11/2026, data emissione e numero fattura. Non si collega a Gmail, non avvia Playwright, non modifica SQLite e non crea PDF. Dopo il test ripristinare TEST_MODE=off (altrimenti un successivo riavvio ripeterà la prova). Se HA_WEBHOOK_URL non è configurato o il webhook risponde con errore, il test viene considerato non riuscito e il log segnala il problema.
+
 Per richiedere un singolo tentativo forzato anche su un messaggio già completato o in attesa del retry, impostare TEST_FORCE_REPROCESS=true. La forzatura viene concessa una sola volta per UID durante l'avvio corrente del container; per un ulteriore tentativo, riavviare il container mantenendo la modalità process. La deduplicazione SHA-256 resta attiva.
 
 Terminata la prova, ripristina sempre:

@@ -3,7 +3,7 @@ from email.message import EmailMessage
 
 from app.mail import MailItem
 from app import service
-from app.service import _iren_notification_details, _matching_provider
+from app.service import _iren_notification_details, _matching_provider, _send_notification_test
 
 
 PROVIDERS = {
@@ -133,3 +133,55 @@ def test_iren_notification_preserves_unknown_date_format():
         "Scadenza: not-available",
     ]
     assert extra["due_date"] == "not-available"
+
+
+
+class FakeNotifier:
+    def __init__(self, result=True):
+        self.result = result
+        self.calls = []
+
+    def send(self, title, message, **extra):
+        self.calls.append((title, message, extra))
+        return self.result
+
+
+def test_notification_test_sends_sample_iren_message_once(monkeypatch):
+    monkeypatch.setattr(service, "_NOTIFICATION_TEST_SENT", set())
+    notifier = FakeNotifier()
+
+    assert _send_notification_test(notifier, "iren") is True
+    assert len(notifier.calls) == 1
+
+    title, message, extra = notifier.calls[0]
+    assert title == "TEST - Bolletta Iren"
+    assert "NOTIFICA DI PROVA" in message
+    assert "Importo da pagare: 28,16 €" in message
+    assert "Scadenza: 24/11/2026" in message
+    assert extra["amount"] == "28,16 €"
+    assert extra["due_date"] == "24/11/2026"
+    assert extra["test"] is True
+    assert extra["status"] == "test"
+
+    # Five-minute polling in the same container must not send duplicates.
+    assert _send_notification_test(notifier, "iren") is True
+    assert len(notifier.calls) == 1
+
+
+def test_notification_test_can_be_retried_when_webhook_fails(monkeypatch):
+    monkeypatch.setattr(service, "_NOTIFICATION_TEST_SENT", set())
+    notifier = FakeNotifier(result=False)
+
+    assert _send_notification_test(notifier, "iren") is False
+    assert "iren" not in service._NOTIFICATION_TEST_SENT
+
+
+def test_notification_test_rejects_unsupported_provider():
+    notifier = FakeNotifier()
+
+    try:
+        _send_notification_test(notifier, "alperia")
+    except ValueError as exc:
+        assert "TEST_PROVIDER=iren" in str(exc)
+    else:
+        raise AssertionError("Only the Iren notification test is currently supported")
