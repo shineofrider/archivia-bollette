@@ -9,3 +9,4 @@ logs/
 playwright/.auth/
 __pycache__/
 *.py[cod]
+.pytest_cache/
