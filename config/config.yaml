@@ -6,7 +6,7 @@ mail:
 providers:
   alperia:
     sender: noreply@alperia.eu
-    subject_regex: '^Nuova fattura disponibile Nr\.\s*.+$'
+    subject_prefix: "Nuova fattura disponibile"
     archive_subdir: Corrente
   iren:
     sender: noreply@mail.clienti.irenyou.gruppoiren.it

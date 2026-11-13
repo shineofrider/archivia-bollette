@@ -29,7 +29,7 @@ Esempio: Corrente/2026_11.pdf. Se esiste già un documento diverso per lo stesso
 
 - Host imap.gmail.com, porta 993, TLS.
 - Cartella INBOX, modificabile in Environment.
-- Alperia: mittente noreply@alperia.eu, oggetto che inizia con Nuova fattura disponibile Nr.
+- Alperia: mittente noreply@alperia.eu, oggetto che inizia con Nuova fattura disponibile (senza vincoli su Nr. o sul numero fattura).
 - Iren: mittente noreply@mail.clienti.irenyou.gruppoiren.it, oggetto esatto Emissione Bolletta.
 - Controllo predefinito ogni 5 minuti.
 - Le email vengono lette in modalità read-only, senza marcarle come lette o eliminarle.
@@ -104,7 +104,41 @@ Il selettore deve individuare un solo documento recente. In presenza di OTP/CAPT
 
 Includere data/ e la cartella Bollette nei backup. Non pubblicare mai credenziali, database o profilo browser.
 
-## Test
+## Test su Gmail (senza cancellare o modificare email)
+
+Il servizio continua a cercare sia email lette sia non lette nella cartella IMAP configurata, nella finestra degli ultimi 730 giorni. Il database SQLite impedisce di archiviare di nuovo i messaggi già completati.
+
+Per verificare il riconoscimento senza produrre effetti:
+
+1. In OMV → Services → Compose → Files → archivia-bollette → Edit, nel campo Environment imposta:
+
+       TEST_MODE=scan
+       TEST_PROVIDER=alperia
+       TEST_UID=
+       TEST_FORCE_REPROCESS=false
+
+2. Salva e ricrea il container con Up.
+3. Apri Logs. Ogni ciclo mostra per ogni email candidata: UID IMAP, mittente, oggetto, corrispondenza del filtro, stato nel database e allegati PDF. La modalità scan non archivia file, non invia notifiche e non avvia Playwright.
+
+Quando nei log trovi l'email Alperia corretta, annota il suo UID e passa alla prova del download:
+
+       TEST_MODE=process
+       TEST_PROVIDER=alperia
+       TEST_UID=UID_LETTO_NEI_LOG
+       TEST_FORCE_REPROCESS=false
+
+Il container elaborerà esclusivamente quell'UID. Se il messaggio non è mai stato completato, lo scaricherà e lo archivierà normalmente. Se è già nello stato done, lo salterà. Per richiedere un singolo tentativo forzato anche su un messaggio già completato, imposta TEST_FORCE_REPROCESS=true: il permesso viene registrato in SQLite e concesso una sola volta per quel messaggio. La deduplicazione SHA-256 resta attiva, quindi un PDF già archiviato non viene salvato una seconda volta.
+
+Terminata la prova, ripristina sempre:
+
+       TEST_MODE=off
+       TEST_PROVIDER=all
+       TEST_UID=
+       TEST_FORCE_REPROCESS=false
+
+Non eliminare data/bollette.sqlite3: contiene lo storico e lo stato di elaborazione.
+
+## Test automatici del codice
 
     pip install -r requirements.txt pytest
     pytest -q

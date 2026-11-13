@@ -100,6 +100,7 @@ class GmailImapClient:
         status, _ = self.connection.select(self.folder, readonly=True)
         if status != "OK":
             raise RuntimeError(f"Impossibile aprire la cartella IMAP {self.folder}")
+        log.info("Connessione Gmail IMAP riuscita; cartella %s aperta in sola lettura", self.folder)
         return self
 
     def __exit__(self, exc_type, exc, tb) -> None:
@@ -124,10 +125,24 @@ class GmailImapClient:
         cutoff = (datetime.now(timezone.utc) - timedelta(days=max(1, lookback_days))).strftime("%d-%b-%Y")
         criteria = f'(FROM "{safe_sender}" SUBJECT "{safe_subject}" SINCE {cutoff})'
         status, data = self.connection.uid("SEARCH", None, criteria)
-        if status != "OK" or not data or not data[0]:
+        if status != "OK":
+            log.error("Ricerca Gmail fallita per mittente=%s oggetto=%r: status=%s", sender, subject_fragment, status)
             return []
+        if not data or not data[0]:
+            log.info("Ricerca Gmail: nessuna email per mittente=%s oggetto contenente=%r", sender, subject_fragment)
+            return []
+
+        uids = data[0].split()
+        if len(uids) > 250:
+            log.warning("Ricerca Gmail: %d risultati; analizzo soltanto i 250 più recenti", len(uids))
+        selected_uids = uids[-250:]
+        log.info(
+            "Ricerca Gmail: %d risultati IMAP per mittente=%s oggetto contenente=%r; "
+            "analizzo %d UID dal %s",
+            len(uids), sender, subject_fragment, len(selected_uids), cutoff,
+        )
         items: list[MailItem] = []
-        for raw_uid in data[0].split()[-250:]:
+        for raw_uid in selected_uids:
             uid = raw_uid.decode("ascii", errors="ignore")
             status, fetched = self.connection.uid("FETCH", uid, "(BODY.PEEK[])")
             if status != "OK" or not fetched:
@@ -143,4 +158,9 @@ class GmailImapClient:
             item = parse_message(uid, raw_message)
             if item.sender == sender.lower() and subject_fragment.lower() in item.subject.lower():
                 items.append(item)
+            else:
+                log.debug(
+                    "Email UID %s esclusa dal filtro finale: mittente=%r oggetto=%r",
+                    uid, item.sender, item.subject,
+                )
         return items

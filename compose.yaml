@@ -27,6 +27,10 @@ services:
       IREN_DOWNLOAD_SELECTOR: "${IREN_DOWNLOAD_SELECTOR:-}"
       IREN_DEBUG_SCREENSHOT: "${IREN_DEBUG_SCREENSHOT:-false}"
       IREN_RETRY_SECONDS: "${IREN_RETRY_SECONDS:-21600}"
+      TEST_MODE: "${TEST_MODE:-off}"
+      TEST_PROVIDER: "${TEST_PROVIDER:-all}"
+      TEST_UID: "${TEST_UID:-}"
+      TEST_FORCE_REPROCESS: "${TEST_FORCE_REPROCESS:-false}"
     volumes:
       - type: bind
         source: ./data

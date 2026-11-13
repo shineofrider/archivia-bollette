@@ -49,6 +49,10 @@ class Database:
                     message_key TEXT,
                     created_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS test_force_claims (
+                    message_key TEXT PRIMARY KEY,
+                    claimed_at TEXT NOT NULL
+                );
                 """
             )
 
@@ -56,6 +60,15 @@ class Database:
         with self.connect() as db:
             row = db.execute("SELECT status FROM messages WHERE message_key=?", (message_key,)).fetchone()
             return str(row["status"]) if row else None
+
+    def claim_test_force(self, message_key: str) -> bool:
+        """Allow TEST_FORCE_REPROCESS to bypass dedup/retry checks only once per message."""
+        with self.connect() as db:
+            cursor = db.execute(
+                "INSERT OR IGNORE INTO test_force_claims(message_key, claimed_at) VALUES(?, ?)",
+                (message_key, utc_now()),
+            )
+            return cursor.rowcount == 1
 
     def retry_due(self, message_key: str, retry_seconds: int) -> bool:
         with self.connect() as db:
