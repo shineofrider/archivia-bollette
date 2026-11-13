@@ -2,6 +2,7 @@ from app.iren import (
     IrenInvoice,
     IrenPortalError,
     _dismiss_cookie_notice,
+    _wait_for_iren_detail_panel,
     _is_iren_detail_url,
     parse_iren_invoice_card,
     parse_iren_invoice_detail,
@@ -302,3 +303,53 @@ def test_iren_detail_url_requires_the_invoice_detail_route():
     assert not _is_iren_detail_url(
         "https://clienti.irenyou.gruppoiren.it/area-riservata/home"
     )
+
+
+
+class FakePanelLocator:
+    def __init__(self, count=1):
+        self.locator_count = count
+        self.wait_arguments = None
+
+    @property
+    def first(self):
+        return self
+
+    def count(self):
+        return self.locator_count
+
+    def wait_for(self, state=None, timeout=None):
+        self.wait_arguments = {"state": state, "timeout": timeout}
+
+
+class FakeDetailPage:
+    def __init__(self, panel):
+        self.panel = panel
+        self.role = None
+        self.name = None
+
+    def get_by_role(self, role, name=None):
+        self.role = role
+        self.name = name
+        return self.panel
+
+
+def test_detail_wait_targets_tabpanel_not_duplicate_tab_label():
+    panel = FakePanelLocator()
+    page = FakeDetailPage(panel)
+
+    _wait_for_iren_detail_panel(page, timeout=12000)
+
+    assert page.role == "tabpanel"
+    assert panel.wait_arguments == {"state": "visible", "timeout": 12000}
+
+
+def test_detail_wait_reports_missing_voci_di_spesa_panel():
+    page = FakeDetailPage(FakePanelLocator(count=0))
+
+    try:
+        _wait_for_iren_detail_panel(page, timeout=12000)
+    except IrenPortalError as exc:
+        assert "pannello 'Voci di spesa' non è presente" in str(exc)
+    else:
+        raise AssertionError("Il pannello assente deve generare un errore chiaro")

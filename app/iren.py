@@ -393,6 +393,19 @@ def _mark_iren_invoice_click_target(page, portal_id: str) -> dict:
     )
 
 
+def _wait_for_iren_detail_panel(page, timeout: int) -> None:
+    """Wait for the Voci di spesa tabpanel, not the tab label with the same name."""
+    panel = page.get_by_role(
+        "tabpanel",
+        name=re.compile(r"^\\s*Voci di spesa\\s*$", re.IGNORECASE),
+    ).first
+    if not panel.count():
+        raise IrenPortalError(
+            "Dettaglio fattura aperto, ma il pannello 'Voci di spesa' non è presente"
+        )
+    panel.wait_for(state="visible", timeout=timeout)
+
+
 def _open_bill_detail(page, invoice: IrenInvoice, timeout: int) -> str:
     target_info = _mark_iren_invoice_click_target(page, invoice.portal_id)
     if not target_info.get("found"):
@@ -434,7 +447,7 @@ def _open_bill_detail(page, invoice: IrenInvoice, timeout: int) -> str:
             f"Fattura {invoice.portal_id}: URL inatteso dopo il clic ({page.url})"
         )
 
-    page.get_by_text(re.compile(r"Voci di spesa", re.IGNORECASE)).wait_for(timeout=timeout)
+    _wait_for_iren_detail_panel(page, timeout)
     detail_text = page.locator("body").inner_text(timeout=10000)
     if not re.search(r"Azioni", detail_text, flags=re.IGNORECASE):
         raise IrenPortalError(
