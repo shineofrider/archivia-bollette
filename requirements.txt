@@ -1,0 +1,4 @@
+PyYAML>=6.0,<7
+pypdf>=5.0,<7
+requests>=2.32,<3
+playwright>=1.50,<2
