@@ -320,29 +320,127 @@ def _login_and_open_bills(page, runtime: dict, timeout: int) -> str:
     return bills_url
 
 
+def _is_iren_detail_url(url: str) -> bool:
+    return INFO_BILL_PATH in url
+
+
+def _mark_iren_invoice_click_target(page, portal_id: str) -> dict:
+    """Mark the clickable invoice link/card ancestor in the rendered list DOM."""
+    return page.locator("body").evaluate(
+        """(body, invoiceId) => {
+            const visible = el => !!(el && el.getClientRects().length);
+            const normalize = value => (value || "").replace(/\\s+/g, " ").trim();
+
+            const titleNodes = Array.from(body.querySelectorAll("*")).filter(el =>
+                visible(el) && (el.children.length === 0) &&
+                normalize(el.textContent).includes(invoiceId)
+            );
+            if (!titleNodes.length) return {found: false, reason: "invoice title not found"};
+
+            titleNodes.sort((a, b) =>
+                normalize(a.textContent).length - normalize(b.textContent).length
+            );
+            const title = titleNodes[0];
+
+            // First look for a real anchor/button or an element with an explicit click handler.
+            let clickable = title.closest('a,button,[role="link"],[role="button"],[onclick]');
+            let card = title;
+
+            // Find the smallest ancestor that represents the complete bill card.
+            let current = title;
+            for (let depth = 0; current && current !== body && depth < 12; depth++) {
+                const text = normalize(current.innerText);
+                if (text.includes(invoiceId) && /Scadenza/i.test(text) && /€/.test(text)) {
+                    card = current;
+                    break;
+                }
+                current = current.parentElement;
+            }
+
+            // Some React cards use a click listener on a wrapper rather than an anchor.
+            if (!clickable || !card.contains(clickable)) {
+                current = title;
+                while (current && current !== body) {
+                    const style = window.getComputedStyle(current);
+                    if (style.cursor === "pointer" || typeof current.onclick === "function") {
+                        clickable = current;
+                        break;
+                    }
+                    if (current === card) break;
+                    current = current.parentElement;
+                }
+            }
+
+            // If the card itself is the event target, click that container as a last resort.
+            if (!clickable) clickable = card;
+            if (!clickable || !visible(clickable)) {
+                return {found: false, reason: "invoice card has no visible click target"};
+            }
+
+            body.querySelectorAll('[data-iren-invoice-click-target="selected"]')
+                .forEach(el => el.removeAttribute("data-iren-invoice-click-target"));
+            clickable.setAttribute("data-iren-invoice-click-target", "selected");
+            clickable.scrollIntoView({block: "center", inline: "center"});
+            return {
+                found: true,
+                tag: clickable.tagName,
+                role: clickable.getAttribute("role") || "",
+                cursor: window.getComputedStyle(clickable).cursor,
+                cardFound: card !== title
+            };
+        }""",
+        portal_id,
+    )
+
+
 def _open_bill_detail(page, invoice: IrenInvoice, timeout: int) -> str:
-    identifier = page.get_by_text(re.compile(re.escape(invoice.portal_id)))
-    if not identifier.count():
+    target_info = _mark_iren_invoice_click_target(page, invoice.portal_id)
+    if not target_info.get("found"):
         raise IrenPortalError(
-            f"Fattura {invoice.portal_id}: elemento non più presente nell'elenco"
+            f"Fattura {invoice.portal_id}: elemento cliccabile non individuato nella scheda "
+            f"({target_info.get('reason', 'motivo sconosciuto')})"
         )
 
-    identifier.first.click()
+    target = page.locator('[data-iren-invoice-click-target="selected"]')
+    if target.count() != 1:
+        raise IrenPortalError(
+            f"Fattura {invoice.portal_id}: il selettore della scheda individua {target.count()} elementi"
+        )
+
+    log.info(
+        "Apro dettaglio fattura Iren %s tramite contenitore %s (role=%s, cursor=%s)",
+        invoice.portal_id,
+        target_info.get("tag"),
+        target_info.get("role") or "-",
+        target_info.get("cursor") or "-",
+    )
+    target.click(timeout=min(timeout, 15000))
+
     try:
         page.wait_for_url(
             re.compile(r".*/area-riservata/info-bolletta(?:[/?#].*)?$"),
-            timeout=timeout,
+            timeout=min(timeout, 15000),
         )
-    except PlaywrightTimeoutError:
-        # Some portal releases update content through SPA navigation only.
-        page.get_by_text(re.compile(r"Voci di spesa", re.IGNORECASE)).wait_for(timeout=timeout)
-        if INFO_BILL_PATH not in page.url:
+    except PlaywrightTimeoutError as exc:
+        current_url = page.url
+        if not _is_iren_detail_url(current_url):
             raise IrenPortalError(
-                f"Fattura {invoice.portal_id}: aperto un contenuto inatteso ({page.url})"
-            )
+                f"Il clic sulla fattura {invoice.portal_id} non ha aperto il dettaglio: "
+                f"URL corrente={current_url}. La pagina è rimasta sull'elenco bollette."
+            ) from exc
 
-    return page.locator("body").inner_text(timeout=10000)
+    if not _is_iren_detail_url(page.url):
+        raise IrenPortalError(
+            f"Fattura {invoice.portal_id}: URL inatteso dopo il clic ({page.url})"
+        )
 
+    page.get_by_text(re.compile(r"Voci di spesa", re.IGNORECASE)).wait_for(timeout=timeout)
+    detail_text = page.locator("body").inner_text(timeout=10000)
+    if not re.search(r"Azioni", detail_text, flags=re.IGNORECASE):
+        raise IrenPortalError(
+            f"Fattura {invoice.portal_id}: raggiunto il dettaglio ma il menu Azioni non compare"
+        )
+    return detail_text
 
 def _download_from_detail(
     page, invoice: IrenInvoice, output_dir: Path, download_timeout: int

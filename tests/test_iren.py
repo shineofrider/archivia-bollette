@@ -2,6 +2,7 @@ from app.iren import (
     IrenInvoice,
     IrenPortalError,
     _dismiss_cookie_notice,
+    _is_iren_detail_url,
     parse_iren_invoice_card,
     parse_iren_invoice_detail,
     parse_iren_invoice_list_text,
@@ -285,3 +286,19 @@ def test_iren_invoice_id_parser_tolerates_unicode_spaces_and_dot_before_number()
     assert invoice.portal_id == "502614099672"
     assert invoice.amount == "28,16 €"
     assert invoice.due_date == "2026-11-24"
+
+
+
+def test_iren_detail_url_requires_the_invoice_detail_route():
+    assert _is_iren_detail_url(
+        "https://clienti.irenyou.gruppoiren.it/area-riservata/info-bolletta"
+    )
+    assert _is_iren_detail_url(
+        "https://clienti.irenyou.gruppoiren.it/area-riservata/info-bolletta?id=123"
+    )
+    assert not _is_iren_detail_url(
+        "https://clienti.irenyou.gruppoiren.it/area-riservata/spese"
+    )
+    assert not _is_iren_detail_url(
+        "https://clienti.irenyou.gruppoiren.it/area-riservata/home"
+    )
