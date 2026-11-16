@@ -170,3 +170,19 @@ def test_cookie_preference_label_classifies_only_optional_tracking_categories():
     assert _is_optional_cookie_label("Partner social media")
     assert not _is_optional_cookie_label("Cookie tecnici necessari")
     assert not _is_optional_cookie_label("Gestione sessione")
+
+
+
+def test_cookie_reject_labels_do_not_treat_close_or_accept_as_rejection():
+    from app.umbra import UMBRA_COOKIE_REJECT_LABELS
+
+    assert any(pattern.fullmatch("Rifiuta tutti") for pattern in UMBRA_COOKIE_REJECT_LABELS)
+    assert any(pattern.fullmatch("Solo cookie necessari") for pattern in UMBRA_COOKIE_REJECT_LABELS)
+    assert not any(pattern.fullmatch("Chiudi") for pattern in UMBRA_COOKIE_REJECT_LABELS)
+    assert not any(pattern.fullmatch("Accetta") for pattern in UMBRA_COOKIE_REJECT_LABELS)
+
+
+def test_cookie_optional_label_classifier_ignores_essential_technical_cookie():
+    assert not _is_optional_cookie_label("Cookie tecnici")
+    assert not _is_optional_cookie_label("Gestione sessione necessaria")
+    assert _is_optional_cookie_label("Cookie marketing e profilazione")

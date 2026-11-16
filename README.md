@@ -140,9 +140,9 @@ Il flusso previsto è:
 4. Se compare il tutorial iniziale a schermo intero, cliccare automaticamente su "Clicca qui per chiudere il tutorial e visualizzare la tua bolletta" (senza selezionare "Non mostrare più").
 5. Se compare il banner cookie, aprire il link "clicca qui" alle preferenze; selezionare un comando esplicito di rifiuto dei cookie opzionali oppure disattivare solo categorie chiaramente etichettate come analitiche/statistiche/marketing e salvare le preferenze. Il programma non clicca "Chiudi" o "Accetta". Se non trova un controllo di rifiuto chiaro, si ferma e salva screenshot e testo delle preferenze in /data/tmp/umbra-cookie-preferences.png e .txt.
 6. Attendere il comando "Scarica la tua bolletta in pdf" e intercettare il download.
-5. Verificare che il file scaricato sia un PDF.
-6. Leggere periodo, numero fattura, importo e scadenza dalla pagina e, se necessario, dal PDF.
-7. Archiviare in /archive/Acqua con il nome bimestrale e inviare la notifica Home Assistant.
+7. Verificare che il file scaricato sia un PDF.
+8. Leggere periodo, numero fattura, importo e scadenza dalla pagina e, se necessario, dal PDF.
+9. Archiviare in /archive/Acqua con il nome bimestrale e inviare la notifica Home Assistant.
 
 ### Nome del PDF bimestrale
 
