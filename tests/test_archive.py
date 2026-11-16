@@ -29,7 +29,7 @@ def test_archiver_deduplicates_and_does_not_overwrite(tmp_path: Path):
 
     first_content = pdf_bytes(100)
     first = archiver.save("alperia", "Corrente", "bolletta.pdf", first_content, email_date, "msg-1")
-    assert first.path.name == "2026_11.pdf"
+    assert first.path.name == "26_11.pdf"
     assert first.path.read_bytes() == first_content
     assert first.duplicate is False
 
@@ -107,4 +107,63 @@ def test_archiver_rejects_unsafe_custom_filename(tmp_path: Path):
             "umbra-message-2",
             target_filename="../26_08-09.pdf",
             period_key="2026_08-09",
+        )
+
+
+
+def test_archiver_uses_configured_archive_filename_format(tmp_path: Path):
+    db = Database(tmp_path / "data" / "db.sqlite3")
+    archiver = PdfArchiver(
+        tmp_path / "archive",
+        db,
+        {
+            "archive": {
+                "fallback_to_email_month": True,
+                "filename_format": "{year:04d}_{month:02d}.pdf",
+            }
+        },
+    )
+    result = archiver.save(
+        "iren",
+        "Gas",
+        "iren-bill.pdf",
+        pdf_bytes(160),
+        datetime(2026, 11, 13, tzinfo=timezone.utc),
+        "iren-message-format",
+    )
+
+    assert result.path.name == "2026_11.pdf"
+
+
+@pytest.mark.parametrize(
+    "filename_format",
+    [
+        "../{year_short:02d}_{month:02d}.pdf",
+        "{year_short:02d}_{month:02d}.txt",
+        "{year_short:02d}/{month:02d}.pdf",
+    ],
+)
+def test_archiver_rejects_unsafe_configured_filename_format(
+    tmp_path: Path, filename_format: str
+):
+    db = Database(tmp_path / "data" / "db.sqlite3")
+    archiver = PdfArchiver(
+        tmp_path / "archive",
+        db,
+        {
+            "archive": {
+                "fallback_to_email_month": True,
+                "filename_format": filename_format,
+            }
+        },
+    )
+
+    with pytest.raises(ValueError, match="Formato del nome file di archivio non valido"):
+        archiver.save(
+            "alperia",
+            "Corrente",
+            "bolletta.pdf",
+            pdf_bytes(170),
+            datetime(2026, 11, 13, tzinfo=timezone.utc),
+            "msg-unsafe-format",
         )

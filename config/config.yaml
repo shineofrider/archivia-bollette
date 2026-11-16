@@ -21,7 +21,7 @@ providers:
     archive_subdir: Acqua
 
 archive:
-  filename_format: '{year:04d}_{month:02d}.pdf'
+  filename_format: '{year_short:02d}_{month:02d}.pdf'
   collision_suffix: '_versione_{digest8}'
   fallback_to_email_month: true
 

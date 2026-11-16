@@ -22,11 +22,11 @@ Il flusso Alperia è pronto per l'uso. L'automazione Iren è stata adattata alle
 
 Il volume OMV viene montato in /archive:
 
-- /archive/Corrente/YYYY_MM.pdf
-- /archive/Gas/YYYY_MM.pdf
+- /archive/Corrente/YY_MM.pdf
+- /archive/Gas/YY_MM.pdf
 - /archive/Acqua/YY_MM-MM.pdf
 
-Esempi: Corrente/2026_11.pdf, Gas/2026_11.pdf, Acqua/26_08-09.pdf. Se esiste già un documento diverso con lo stesso nome, non viene sovrascritto: viene salvata una variante con suffisso hash. Le cartelle vengono create automaticamente.
+Esempi: Corrente/26_11.pdf, Gas/26_11.pdf, Acqua/26_08-09.pdf. Se esiste già un documento diverso con lo stesso nome, non viene sovrascritto: viene salvata una variante con suffisso hash. Le cartelle vengono create automaticamente.
 
 ## Acquisizione Gmail
 
