@@ -303,7 +303,15 @@ def _dismiss_umbra_tutorial(page) -> bool:
     return True
 
 
-UMBRA_COOKIE_BANNER_MARKER = "Questo sito usa cookie tecnici"
+UMBRA_COOKIE_BANNER_MARKERS = (
+    "Questo sito usa cookie tecnici",
+    "Questo sito web utilizza i cookie",
+)
+COOKIEBOT_DIALOG_SELECTOR = "#CybotCookiebotDialog"
+COOKIEBOT_REJECT_SELECTORS = (
+    "#CybotCookiebotDialogBodyLevelButtonLevelOptinDeclineAll",
+    "#CybotCookiebotDialogBodyButtonDecline",
+)
 UMBRA_COOKIE_SETTINGS_LINK = re.compile(r"^\s*clicca\s+qui[.!]?\s*$", re.IGNORECASE)
 UMBRA_COOKIE_REJECT_LABELS = (
     re.compile(r"^\s*rifiuta\s+tutti(?:\s+i\s+cookie)?\s*$", re.IGNORECASE),
@@ -386,15 +394,69 @@ def _disable_optional_cookie_checkboxes(page) -> tuple[int, list[str]]:
     return changed, changed_labels
 
 
+def _contains_umbra_cookie_banner_text(body_text: str) -> bool:
+    normalized = (body_text or "").casefold()
+    return any(marker.casefold() in normalized for marker in UMBRA_COOKIE_BANNER_MARKERS)
+
+
 def _visible_umbra_cookie_banner(page) -> bool:
-    """Check visibility, not mere DOM text: dismissed banners can remain hidden in HTML."""
+    """Check known CMP dialogs and visible banner text, not hidden residual DOM text."""
     try:
-        marker = page.get_by_text(
-            re.compile(re.escape(UMBRA_COOKIE_BANNER_MARKER), re.IGNORECASE)
-        ).last
-        return bool(marker.count() and marker.is_visible())
+        cookiebot = page.locator(COOKIEBOT_DIALOG_SELECTOR)
+        if cookiebot.count() and cookiebot.last.is_visible():
+            return True
+    except Exception:  # noqa: BLE001
+        pass
+
+    try:
+        for marker_text in UMBRA_COOKIE_BANNER_MARKERS:
+            marker = page.get_by_text(
+                re.compile(re.escape(marker_text), re.IGNORECASE)
+            ).last
+            if marker.count() and marker.is_visible():
+                return True
     except Exception:  # noqa: BLE001
         return False
+    return False
+
+
+def _click_cookiebot_reject(page) -> bool:
+    """Use Cookiebot's documented opt-out control before any generic text fallback."""
+    for selector in COOKIEBOT_REJECT_SELECTORS:
+        try:
+            control = page.locator(selector).last
+            if control.count() and control.is_visible():
+                control.click(timeout=10000)
+                log.info("Umbra Acque: selezionato il comando Cookiebot di rifiuto")
+                return True
+        except Exception:  # noqa: BLE001
+            continue
+
+    # Some Cookiebot themes change button IDs but preserve the visible Italian label.
+    try:
+        control = page.get_by_role(
+            "button", name=re.compile(r"^\s*Rifiuta\s*$", re.IGNORECASE)
+        ).last
+        if control.count() and control.is_visible():
+            control.click(timeout=10000)
+            log.info("Umbra Acque: selezionato il pulsante Cookiebot Rifiuta")
+            return True
+    except Exception:  # noqa: BLE001
+        pass
+    return False
+
+
+def _wait_for_cookiebot_to_close(page, timeout: int = 10000) -> None:
+    dialog = page.locator(COOKIEBOT_DIALOG_SELECTOR)
+    if dialog.count():
+        dialog.last.wait_for(state="hidden", timeout=timeout)
+        return
+
+    for marker_text in UMBRA_COOKIE_BANNER_MARKERS:
+        marker = page.get_by_text(re.compile(re.escape(marker_text), re.IGNORECASE)).last
+        if marker.count() and marker.is_visible():
+            marker.wait_for(state="hidden", timeout=timeout)
+            return
 
 
 def _cookie_preferences_scope(page, origin_url: str, is_popup: bool):
@@ -455,13 +517,12 @@ def _return_to_umbra_invoice_after_cookie_choice(page, origin_url: str) -> None:
 
 
 def _manage_umbra_cookie_consent(page, output_dir: Path) -> None:
-    """Open the actual preference UI, reject optional cookies, and verify the banner is hidden."""
+    """Use Cookiebot's explicit Rifiuta action; never accept all or close the banner."""
     body_text = page.locator("body").inner_text(timeout=10000)
-    if UMBRA_COOKIE_BANNER_MARKER.casefold() not in body_text.casefold():
+    if not _contains_umbra_cookie_banner_text(body_text):
         log.info("Banner cookie Umbra Acque non presente")
         return
 
-    # Locate the actual anchor and collect only non-secret diagnostics about its target.
     settings_link = page.get_by_role("link", name=UMBRA_COOKIE_SETTINGS_LINK).last
     if not settings_link.count() or not settings_link.is_visible():
         _save_umbra_diagnostics(page, output_dir, prefix="umbra-cookie-preferences")
@@ -473,16 +534,14 @@ def _manage_umbra_cookie_consent(page, output_dir: Path) -> None:
     try:
         link_info = settings_link.evaluate(
             """el => ({
-                text: (el.innerText || el.textContent || "").trim(),
                 target: el.getAttribute("target") || "",
-                href: el.getAttribute("href") || "",
-                tag: el.tagName
+                href: el.getAttribute("href") || ""
             })"""
         )
     except Exception:  # noqa: BLE001
-        link_info = {"text": "clicca qui", "target": "", "href": "", "tag": "A"}
+        link_info = {"target": "", "href": ""}
 
-    # Do not log query strings/fragments; an href can contain a session token.
+    # URLs can contain an opaque invoice/session token: log only the hostname.
     safe_target = ""
     try:
         parsed_target = urlsplit(str(link_info.get("href", "")))
@@ -494,9 +553,9 @@ def _manage_umbra_cookie_consent(page, output_dir: Path) -> None:
     opened_pages = []
     page.context.on("page", lambda opened: opened_pages.append(opened))
     log.info(
-        "Umbra Acque: apro il link alle preferenze cookie (target=%s, destinazione=%s)",
+        "Umbra Acque: apro il collegamento alle preferenze cookie (target=%s, destinazione=%s)",
         link_info.get("target") or "stessa scheda",
-        safe_target or "pannello gestito dal sito",
+        safe_target or "gestita dal sito",
     )
     settings_link.click(timeout=10000)
     page.wait_for_timeout(1200)
@@ -509,73 +568,105 @@ def _manage_umbra_cookie_consent(page, output_dir: Path) -> None:
         except PlaywrightTimeoutError:
             pass
 
-    # Save a diagnostic immediately after following "clicca qui", before touching any consent.
     _save_umbra_diagnostics(
         preferences_page, output_dir, prefix="umbra-cookie-preferences"
     )
 
-    scope = _cookie_preferences_scope(preferences_page, origin_url, is_popup)
-    if scope is None:
-        raise UmbraAcqueError(
-            "Il link 'clicca qui' è stato seguito, ma non è comparso un pannello o una pagina "
-            "di preferenze cookie identificabile. Ho salvato umbra-cookie-preferences.png/.txt; "
-            "non ho premuto Chiudi o Accetta."
-        )
+    # The supplied screenshot shows Cookiebot's three-button banner:
+    # "Accetta tutti", "Accetta selezionati", and the explicit "Rifiuta" action.
+    # Cookiebot documents the following IDs for the opt-out action.
+    if _click_cookiebot_reject(preferences_page):
+        try:
+            _wait_for_cookiebot_to_close(preferences_page, timeout=10000)
+        except PlaywrightTimeoutError as exc:
+            _save_umbra_diagnostics(
+                preferences_page, output_dir, prefix="umbra-cookie-after-reject"
+            )
+            raise UmbraAcqueError(
+                "Cookiebot ha ricevuto il comando Rifiuta, ma il banner non si è chiuso"
+            ) from exc
 
-    if _click_first_visible_named_control(scope, UMBRA_COOKIE_REJECT_LABELS):
-        preferences_page.wait_for_timeout(700)
         if is_popup:
             try:
                 preferences_page.close()
             except Exception:  # noqa: BLE001
                 pass
+
+        # The "clicca qui" link can have navigated the current tab to the Privacy page.
+        # Always return to the original one-time invoice URL after persisting the choice.
+        if is_popup or page.url != origin_url:
             _return_to_umbra_invoice_after_cookie_choice(page, origin_url)
+        else:
+            page.wait_for_timeout(700)
 
         if _visible_umbra_cookie_banner(page):
             _save_umbra_diagnostics(
                 page, output_dir, prefix="umbra-cookie-after-reject"
             )
             raise UmbraAcqueError(
-                "Il comando di rifiuto cookie è stato selezionato, ma il banner è ancora visibile "
-                "dopo l'aggiornamento della pagina. Non procedo al download."
+                "Il rifiuto Cookiebot è stato inviato, ma il banner compare ancora sulla "
+                "pagina della fattura. Non procedo al download."
             )
-        log.info("Umbra Acque: rifiutati i cookie opzionali tramite comando esplicito")
-        return
 
-    changed, labels = _disable_optional_cookie_checkboxes(scope)
-    if changed and _click_first_visible_named_control(scope, UMBRA_COOKIE_SAVE_LABELS):
-        preferences_page.wait_for_timeout(700)
-        if is_popup:
-            try:
-                preferences_page.close()
-            except Exception:  # noqa: BLE001
-                pass
-            _return_to_umbra_invoice_after_cookie_choice(page, origin_url)
-
-        if _visible_umbra_cookie_banner(page):
-            _save_umbra_diagnostics(
-                page, output_dir, prefix="umbra-cookie-after-reject"
-            )
-            raise UmbraAcqueError(
-                "Le categorie opzionali sono state disattivate, ma il banner è ancora visibile "
-                "dopo l'aggiornamento della pagina."
-            )
         log.info(
-            "Umbra Acque: disattivate categorie cookie opzionali (%d): %s",
-            changed,
-            labels,
+            "Umbra Acque: consenso limitato ai cookie necessari; pagina della fattura ripristinata"
         )
         return
+
+    # Generic CMP fallback: only operate on an actual preferences dialog/screen.
+    scope = _cookie_preferences_scope(preferences_page, origin_url, is_popup)
+    if scope is not None:
+        if _click_first_visible_named_control(scope, UMBRA_COOKIE_REJECT_LABELS):
+            preferences_page.wait_for_timeout(700)
+            if is_popup:
+                try:
+                    preferences_page.close()
+                except Exception:  # noqa: BLE001
+                    pass
+            if is_popup or page.url != origin_url:
+                _return_to_umbra_invoice_after_cookie_choice(page, origin_url)
+
+            if _visible_umbra_cookie_banner(page):
+                _save_umbra_diagnostics(
+                    page, output_dir, prefix="umbra-cookie-after-reject"
+                )
+                raise UmbraAcqueError(
+                    "Il comando di rifiuto cookie è stato selezionato, ma il banner è ancora visibile"
+                )
+            log.info("Umbra Acque: cookie opzionali rifiutati tramite comando esplicito")
+            return
+
+        changed, labels = _disable_optional_cookie_checkboxes(scope)
+        if changed and _click_first_visible_named_control(scope, UMBRA_COOKIE_SAVE_LABELS):
+            preferences_page.wait_for_timeout(700)
+            if is_popup:
+                try:
+                    preferences_page.close()
+                except Exception:  # noqa: BLE001
+                    pass
+            if is_popup or page.url != origin_url:
+                _return_to_umbra_invoice_after_cookie_choice(page, origin_url)
+            if _visible_umbra_cookie_banner(page):
+                _save_umbra_diagnostics(
+                    page, output_dir, prefix="umbra-cookie-after-reject"
+                )
+                raise UmbraAcqueError(
+                    "Le categorie opzionali sono state disattivate, ma il banner è ancora visibile"
+                )
+            log.info(
+                "Umbra Acque: disattivate categorie cookie opzionali (%d): %s",
+                changed,
+                labels,
+            )
+            return
 
     _save_umbra_diagnostics(
-        preferences_page,
-        output_dir,
-        prefix="umbra-cookie-preferences",
+        preferences_page, output_dir, prefix="umbra-cookie-preferences"
     )
     raise UmbraAcqueError(
-        "Nelle preferenze Umbra Acque non ho trovato un comando esplicito di rifiuto "
-        "né categorie opzionali chiaramente etichettate. Non ho modificato il consenso "
-        "e non ho premuto Chiudi o Accetta. Screenshot e testo delle preferenze salvati."
+        "Non ho trovato un controllo esplicito per rifiutare i cookie opzionali. "
+        "Non ho premuto Accetta tutti, Accetta selezionati o Chiudi; "
+        "screenshot e testo delle preferenze sono stati salvati."
     )
 
 def _save_umbra_diagnostics(

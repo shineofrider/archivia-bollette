@@ -8,6 +8,9 @@ from app.umbra import (
     _dismiss_umbra_tutorial,
     _cookie_preferences_scope,
     _is_optional_cookie_label,
+    COOKIEBOT_DIALOG_SELECTOR,
+    COOKIEBOT_REJECT_SELECTORS,
+    _contains_umbra_cookie_banner_text,
     extract_umbra_invoice_link,
     parse_umbra_invoice_text,
 )
@@ -256,3 +259,23 @@ def test_cookie_preferences_scope_accepts_a_separate_preferences_popup():
         origin_url="https://bollettainterattiva.umbraacque.com/mi/test#/",
         is_popup=True,
     ) is page
+
+
+
+def test_cookiebot_reject_selector_targets_explicit_opt_out_not_acceptance():
+    assert COOKIEBOT_DIALOG_SELECTOR == "#CybotCookiebotDialog"
+    assert "#CybotCookiebotDialogBodyLevelButtonLevelOptinDeclineAll" in COOKIEBOT_REJECT_SELECTORS
+    assert "#CybotCookiebotDialogBodyButtonDecline" in COOKIEBOT_REJECT_SELECTORS
+    assert not any("AllowAll" in selector or "Accept" in selector for selector in COOKIEBOT_REJECT_SELECTORS)
+
+
+def test_umbra_cookie_banner_detector_supports_both_seen_banner_texts():
+    assert _contains_umbra_cookie_banner_text(
+        "Questo sito usa cookie tecnici, anche di terze parti"
+    )
+    assert _contains_umbra_cookie_banner_text(
+        "Questo sito web utilizza i cookie. Accetta tutti. Rifiuta."
+    )
+    assert not _contains_umbra_cookie_banner_text(
+        "Bolletta interattiva: quanto devo pagare?"
+    )
