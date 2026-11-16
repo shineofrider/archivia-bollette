@@ -6,6 +6,7 @@ from app.umbra import (
     UmbraAcqueError,
     UMBRA_TUTORIAL_CLOSE_LABEL,
     _dismiss_umbra_tutorial,
+    _cookie_preferences_scope,
     _is_optional_cookie_label,
     extract_umbra_invoice_link,
     parse_umbra_invoice_text,
@@ -186,3 +187,72 @@ def test_cookie_optional_label_classifier_ignores_essential_technical_cookie():
     assert not _is_optional_cookie_label("Cookie tecnici")
     assert not _is_optional_cookie_label("Gestione sessione necessaria")
     assert _is_optional_cookie_label("Cookie marketing e profilazione")
+
+
+
+class FakeScopeLocator:
+    def __init__(self, count=0, visible=False):
+        self._count = count
+        self._visible = visible
+
+    def count(self):
+        return self._count
+
+    def nth(self, index):
+        return self
+
+    def is_visible(self):
+        return self._visible
+
+
+class FakeCookieScopePage:
+    def __init__(self, body_text, url="https://bollettainterattiva.umbraacque.com/mi/test#/", checkbox_count=0):
+        self.body_text = body_text
+        self.url = url
+        self.checkbox_count = checkbox_count
+
+    def locator(self, selector):
+        if selector == "body":
+            class Body:
+                def inner_text(inner_self, timeout=None):
+                    return self.body_text
+            return Body()
+        if selector == 'input[type="checkbox"]':
+            return FakeScopeLocator(count=self.checkbox_count)
+        return FakeScopeLocator(count=0)
+
+
+def test_cookie_preferences_scope_does_not_scan_invoice_page_globally():
+    page = FakeCookieScopePage(
+        "La bolletta è disponibile. Questo sito usa cookie tecnici. "
+        "Negare il consenso clicca qui. Chiudi."
+    )
+
+    assert _cookie_preferences_scope(
+        page,
+        origin_url=page.url,
+        is_popup=False,
+    ) is None
+
+
+def test_cookie_preferences_scope_accepts_a_real_preferences_panel_with_checkboxes():
+    page = FakeCookieScopePage(
+        "Preferenze cookie: scegli le categorie",
+        checkbox_count=1,
+    )
+
+    assert _cookie_preferences_scope(
+        page,
+        origin_url=page.url,
+        is_popup=False,
+    ) is page
+
+
+def test_cookie_preferences_scope_accepts_a_separate_preferences_popup():
+    page = FakeCookieScopePage("Rifiuta tutti")
+
+    assert _cookie_preferences_scope(
+        page,
+        origin_url="https://bollettainterattiva.umbraacque.com/mi/test#/",
+        is_popup=True,
+    ) is page
