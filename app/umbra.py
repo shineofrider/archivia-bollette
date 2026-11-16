@@ -789,6 +789,65 @@ def _is_umbra_first_party(host: str) -> bool:
     return host == "umbraacque.com" or host.endswith(".umbraacque.com")
 
 
+def _umbra_tracking_block_reason(url: str) -> str | None:
+    """Return a reason for a narrowly-scoped tracking resource, otherwise None."""
+    try:
+        parsed = urlsplit(url)
+    except ValueError:
+        return None
+
+    host = (parsed.hostname or "").lower().rstrip(".")
+    path = (parsed.path or "/").lower()
+
+    # Doxee interaction telemetry endpoint observed in the real invoice page trace.
+    if host == "api-headlight.doxee.com":
+        return "Doxee Headlight interaction telemetry"
+
+    # Matomo tracker host and its bootstrap/init script observed in the trace.
+    if host == "matomo.doxeeplatform.com":
+        return "Matomo analytics"
+    if host == "media-platform.doxee.com" and path.startswith("/static/matomo/"):
+        return "Matomo initialization script"
+
+    # Block only the exact FingerprintJS asset, not the whole jsDelivr CDN.
+    if (
+        host == "cdn.jsdelivr.net"
+        and path == "/npm/@fingerprintjs/fingerprintjs@3.0.6/dist/fp.min.js"
+    ):
+        return "FingerprintJS browser fingerprinting library"
+
+    # Google Tag Manager is intentionally not blocked yet: the trace only showed
+    # the library being loaded, not a subsequent analytics/ads transmission.
+    return None
+
+
+def _install_umbra_tracking_block(context, tracker: dict) -> None:
+    """Abort only observed tracking endpoints; keep portal/CDN/application traffic intact."""
+    def handle_route(route) -> None:
+        request = route.request
+        reason = _umbra_tracking_block_reason(request.url)
+        if reason:
+            safe = _safe_network_url(request.url)
+            key = (safe["host"], safe["path"], reason)
+            tracker["blocked_requests"][key] = (
+                tracker["blocked_requests"].get(key, 0) + 1
+            )
+            log.info(
+                "Umbra Acque: bloccata risorsa tracking (%s) %s%s",
+                reason,
+                safe["host"],
+                safe["path"],
+            )
+            route.abort("blockedbyclient")
+            return
+        route.continue_()
+
+    context.route("**/*", handle_route)
+    log.info(
+        "Filtro tracking Umbra Acque attivo: Headlight, Matomo e FingerprintJS specifico"
+    )
+
+
 def _new_umbra_network_tracker(context):
     """Collect request metadata only: no headers, bodies, cookie values, or query strings."""
     tracker = {
@@ -797,6 +856,7 @@ def _new_umbra_network_tracker(context):
         "request_failures": {},
         "pages": [],
         "cookie_names": [],
+        "blocked_requests": {},
         "_page_objects": [],
     }
     attached_pages: set[int] = set()
@@ -917,6 +977,10 @@ def _save_umbra_network_diagnostics(context, tracker: dict, pages: list, output_
             "requests": request_rows,
             "responses": response_rows,
             "request_failures": failure_rows,
+            "blocked_requests": [
+                {"host": key[0], "path": key[1], "reason": key[2], "count": count}
+                for key, count in sorted(tracker["blocked_requests"].items())
+            ],
             "set_cookie_names": sorted(tracker["cookie_names"]),
             "browser_cookies": sorted(cookies, key=lambda item: (item["domain"], item["name"])),
             "pages": rendered_pages,
@@ -980,6 +1044,8 @@ def download_umbra_invoice(
         try:
             context = browser.new_context(accept_downloads=True)
             tracker, attach_network_tracking = _new_umbra_network_tracker(context)
+            if bool(config.get("runtime", {}).get("umbra_block_tracking", False)):
+                _install_umbra_tracking_block(context, tracker)
             page = context.new_page()
             attach_network_tracking(page)
             tracked_pages = [page]

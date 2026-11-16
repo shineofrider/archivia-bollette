@@ -16,6 +16,7 @@ from app.umbra import (
     _safe_network_url,
     _is_umbra_first_party,
     _new_umbra_network_tracker,
+    _umbra_tracking_block_reason,
     extract_umbra_invoice_link,
     parse_umbra_invoice_text,
 )
@@ -426,3 +427,56 @@ def test_network_tracker_records_domains_and_cookie_names_without_secret_values(
     assert "invoice-private-token" not in repr(tracker)
     assert "never-store-this" not in repr(tracker)
     assert "secret=value" not in repr(tracker)
+
+
+
+@pytest.mark.parametrize(
+    ("url", "expected_reason"),
+    [
+        (
+            "https://api-headlight.doxee.com/v1/ingestion/events/interaction/insert-event-batch?token=secret",
+            "Doxee Headlight interaction telemetry",
+        ),
+        (
+            "https://matomo.doxeeplatform.com/js/container_Dknw1bgD.js",
+            "Matomo analytics",
+        ),
+        (
+            "https://media-platform.doxee.com/static/matomo/v5/init_matomo_dp2.min.js",
+            "Matomo initialization script",
+        ),
+        (
+            "https://cdn.jsdelivr.net/npm/@fingerprintjs/fingerprintjs@3.0.6/dist/fp.min.js",
+            "FingerprintJS browser fingerprinting library",
+        ),
+    ],
+)
+def test_umbra_tracking_block_matches_only_observed_tracking_resources(url, expected_reason):
+    assert _umbra_tracking_block_reason(url) == expected_reason
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://bollettainterattiva.umbraacque.com/mi/private-token#/",
+        "https://bollettainterattiva.umbraacque.com/da-purl/document/hash/private/js/app.5e7d198d.js",
+        "https://cdn.jsdelivr.net/npm/@popperjs/core@2.9.3/dist/umd/popper.min.js",
+        "https://cdn.jsdelivr.net/npm/chart.js@3.4.1/dist/chart.min.js",
+        "https://fonts.googleapis.com/css2?family=Karla",
+        "https://storage.googleapis.com/genesyschatlib/widgetchat/PROD/scripts/widgetCustom.js",
+        "https://www.googletagmanager.com/gtag/js?id=G-EXAMPLE",
+        "https://contenthub.doxee.com/umbr/items/news",
+        "https://www.umbraacque.com/assets/js/scripts.js",
+    ],
+)
+def test_umbra_tracking_block_preserves_portal_and_non_tracking_resources(url):
+    assert _umbra_tracking_block_reason(url) is None
+
+
+def test_umbra_tracking_block_is_narrow_to_exact_fingerprintjs_version():
+    assert _umbra_tracking_block_reason(
+        "https://cdn.jsdelivr.net/npm/@fingerprintjs/fingerprintjs@4.0.0/dist/fp.min.js"
+    ) is None
+    assert _umbra_tracking_block_reason(
+        "https://cdn.jsdelivr.net/npm/@fingerprintjs/fingerprintjs@3.0.6/dist/fp.min.js.map"
+    ) is None

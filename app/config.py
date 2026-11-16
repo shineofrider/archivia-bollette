@@ -60,6 +60,7 @@ def load_config() -> dict[str, Any]:
         "iren_retry_seconds": int(os.getenv("IREN_RETRY_SECONDS", 21600)),
         "umbra_enabled": env_bool("UMBRA_AUTOMATION_ENABLED", False),
         "umbra_debug_screenshot": env_bool("UMBRA_DEBUG_SCREENSHOT", False),
+        "umbra_block_tracking": env_bool("UMBRA_BLOCK_TRACKING", False),
         "umbra_retry_seconds": int(os.getenv("UMBRA_RETRY_SECONDS", 21600)),
     }
     return config

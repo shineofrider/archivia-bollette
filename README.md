@@ -161,6 +161,18 @@ Non servono username o password Umbra Acque: il link contenuto nell'email porta 
     UMBRA_AUTOMATION_ENABLED=true
     UMBRA_DEBUG_SCREENSHOT=true
 
+Per abilitare il blocco selettivo delle risorse di tracciamento osservate impostare anche:
+
+    UMBRA_BLOCK_TRACKING=true
+
+Quando attivo, il browser blocca solo:
+- api-headlight.doxee.com (invio eventi Doxee Headlight);
+- matomo.doxeeplatform.com (Matomo);
+- media-platform.doxee.com/static/matomo/ (inizializzazione Matomo);
+- il file esatto FingerprintJS 3.0.6 su jsDelivr.
+
+Non vengono bloccati il dominio della bolletta, le librerie generiche dei CDN, il widget Genesys, Cookiebot o Google Tag Manager. Quest'ultimo resta consentito perché nella diagnostica è stato osservato il caricamento dello script, ma non una successiva trasmissione analytics/ads. I blocchi vengono registrati nei log e nel campo blocked_requests della diagnostica JSON in caso di errore. La variabile è disattivata per default: attivarla esplicitamente dopo il Pull/Up.
+
 Per i successivi utilizzi si può lasciare UMBRA_DEBUG_SCREENSHOT=false. In caso di errore, quando il debug è attivo vengono salvati /data/tmp/umbra-error.png e /data/tmp/umbra-error.txt. Viene inoltre creato /data/tmp/umbra-network-diagnostic.json con inventario aggregato delle richieste di rete: host, percorso redatto, tipo risorsa, metodo, stato HTTP, richieste fallite, nomi cookie e domini, host di script/iframe. Non vengono salvati query string, fragment, header, corpi delle richieste/risposte, valori dei cookie o testo della bolletta. Gli identificativi lunghi nei percorsi vengono oscurati. La diagnostica serve a identificare eventuali analytics, pixel e servizi terzi prima di decidere se bloccarli; in questa fase non viene bloccato automaticamente alcun dominio.
 
 Il link email è un riferimento di accesso alla fattura: non copiarlo nei log, non pubblicarlo e non condividerlo.
