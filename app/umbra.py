@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import html
+import json
 import logging
 import re
 from dataclasses import dataclass
@@ -759,6 +760,175 @@ def _manage_umbra_cookie_consent(page, output_dir: Path) -> None:
         "screenshot e testo delle preferenze sono stati salvati."
     )
 
+def _safe_network_url(url: str) -> dict[str, str]:
+    """Return only scheme, host, and a redacted path; never query or fragment."""
+    try:
+        parsed = urlsplit(url)
+        host = (parsed.hostname or "").lower()
+        raw_segments = [segment for segment in parsed.path.split("/") if segment]
+        safe_segments = []
+        for index, segment in enumerate(raw_segments):
+            if (index == 1 and raw_segments[0].lower() == "mi") or len(segment) >= 24 or (
+                segment.isdigit() and len(segment) >= 7
+            ):
+                safe_segments.append("<redacted>")
+            else:
+                safe_segments.append(segment[:80])
+        path = "/" + "/".join(safe_segments) if safe_segments else "/"
+        return {
+            "scheme": parsed.scheme.lower(),
+            "host": host,
+            "path": path,
+        }
+    except Exception:  # noqa: BLE001
+        return {"scheme": "", "host": "", "path": "<unavailable>"}
+
+
+def _is_umbra_first_party(host: str) -> bool:
+    host = (host or "").lower().rstrip(".")
+    return host == "umbraacque.com" or host.endswith(".umbraacque.com")
+
+
+def _new_umbra_network_tracker(context):
+    """Collect request metadata only: no headers, bodies, cookie values, or query strings."""
+    tracker = {
+        "requests": {},
+        "response_statuses": {},
+        "request_failures": {},
+        "pages": [],
+        "cookie_names": [],
+        "_page_objects": [],
+    }
+    attached_pages: set[int] = set()
+
+    def add_page(page) -> None:
+        identity = id(page)
+        if identity in attached_pages:
+            return
+        attached_pages.add(identity)
+        tracker["_page_objects"].append(page)
+        try:
+            tracker["pages"].append(_safe_network_url(page.url))
+        except Exception:  # noqa: BLE001
+            pass
+
+        def record_request(request) -> None:
+            safe = _safe_network_url(request.url)
+            host = safe["host"]
+            key = (
+                host,
+                safe["path"],
+                str(request.resource_type or "other"),
+                str(request.method or "GET"),
+                not _is_umbra_first_party(host),
+            )
+            entry = tracker["requests"].setdefault(
+                key,
+                {"host": host, "path": safe["path"], "resource_type": key[2],
+                 "method": key[3], "third_party": key[4], "count": 0},
+            )
+            entry["count"] += 1
+
+        def record_response(response) -> None:
+            safe = _safe_network_url(response.url)
+            key = (safe["host"], safe["path"], int(response.status))
+            tracker["response_statuses"][key] = tracker["response_statuses"].get(key, 0) + 1
+
+            # Record only cookie names from Set-Cookie response headers, never their values.
+            try:
+                set_cookie = response.headers.get("set-cookie", "")
+                for line in re.split(r",(?=\s*[^;,=\s]+=[^;,]*)", set_cookie):
+                    first = line.split(";", 1)[0]
+                    name = first.split("=", 1)[0].strip()
+                    if name and name not in tracker["cookie_names"]:
+                        tracker["cookie_names"].append(name)
+            except Exception:  # noqa: BLE001
+                pass
+
+        def record_failure(request) -> None:
+            safe = _safe_network_url(request.url)
+            key = (safe["host"], safe["path"], str(request.resource_type or "other"))
+            tracker["request_failures"][key] = tracker["request_failures"].get(key, 0) + 1
+
+        page.on("request", record_request)
+        page.on("response", record_response)
+        page.on("requestfailed", record_failure)
+
+    context.on("page", add_page)
+    return tracker, add_page
+
+
+def _save_umbra_network_diagnostics(context, tracker: dict, pages: list, output_dir: Path) -> None:
+    """Persist aggregated network inventory and cookie names, excluding secrets and content."""
+    try:
+        cookies = []
+        for cookie in context.cookies():
+            cookies.append({
+                "name": cookie.get("name", ""),
+                "domain": cookie.get("domain", ""),
+                "path": cookie.get("path", ""),
+                "secure": bool(cookie.get("secure", False)),
+                "httpOnly": bool(cookie.get("httpOnly", False)),
+                "sameSite": cookie.get("sameSite", ""),
+            })
+
+        rendered_pages = []
+        for page in pages:
+            try:
+                if page.is_closed():
+                    continue
+                rendered_pages.append({
+                    "location": _safe_network_url(page.url),
+                    "scripts": page.evaluate(
+                        """() => Array.from(document.scripts)
+                            .map(s => s.src).filter(Boolean)
+                            .map(u => ({host: new URL(u).hostname}))"""
+                    ),
+                    "iframes": page.evaluate(
+                        """() => Array.from(document.querySelectorAll("iframe"))
+                            .map(f => f.src).filter(Boolean)
+                            .map(u => {
+                                const x = new URL(u);
+                                return {host: x.hostname, path: x.pathname};
+                            })"""
+                    ),
+                })
+            except Exception as exc:  # noqa: BLE001
+                rendered_pages.append({"inspection_error": type(exc).__name__})
+
+        request_rows = sorted(
+            tracker["requests"].values(),
+            key=lambda item: (item["host"], item["resource_type"], item["path"]),
+        )
+        response_rows = [
+            {"host": key[0], "path": key[1], "status": key[2], "count": count}
+            for key, count in sorted(tracker["response_statuses"].items())
+        ]
+        failure_rows = [
+            {"host": key[0], "path": key[1], "resource_type": key[2], "count": count}
+            for key, count in sorted(tracker["request_failures"].items())
+        ]
+
+        report = {
+            "privacy_note": (
+                "No request query strings, fragments, headers, bodies, cookie values, "
+                "or invoice page text are stored."
+            ),
+            "requests": request_rows,
+            "responses": response_rows,
+            "request_failures": failure_rows,
+            "set_cookie_names": sorted(tracker["cookie_names"]),
+            "browser_cookies": sorted(cookies, key=lambda item: (item["domain"], item["name"])),
+            "pages": rendered_pages,
+        }
+        output_dir.mkdir(parents=True, exist_ok=True)
+        path = output_dir / "umbra-network-diagnostic.json"
+        path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+        log.warning("Inventario rete Umbra Acque salvato in %s", path)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Diagnostica rete Umbra Acque non riuscita (%s)", type(exc).__name__)
+
+
 def _save_umbra_diagnostics(
     page, output_dir: Path, prefix: str = "umbra-error"
 ) -> None:
@@ -804,15 +974,22 @@ def download_umbra_invoice(
             args=["--disable-dev-shm-usage"],
         )
         page = None
+        context = None
+        tracker = None
+        tracked_pages = []
         try:
             context = browser.new_context(accept_downloads=True)
+            tracker, attach_network_tracking = _new_umbra_network_tracker(context)
             page = context.new_page()
+            attach_network_tracking(page)
+            tracked_pages = [page]
             page.set_default_timeout(timeout)
             page.goto(invoice_url, wait_until="domcontentloaded", timeout=timeout)
             # The first visit can display a full-screen tutorial before the invoice page.
             page.wait_for_timeout(1200)
             _dismiss_umbra_tutorial(page)
             _manage_umbra_cookie_consent(page, output_dir)
+            tracked_pages = list(tracker["_page_objects"])
 
             current_host = (urlsplit(page.url).hostname or "").lower()
             if current_host != UMBRA_HOST:
@@ -847,6 +1024,13 @@ def download_umbra_invoice(
         except Exception as exc:  # noqa: BLE001
             if debug_screenshot and page is not None:
                 _save_umbra_diagnostics(page, output_dir)
+                if context is not None and tracker is not None:
+                    _save_umbra_network_diagnostics(
+                        context,
+                        tracker,
+                        tracked_pages,
+                        output_dir,
+                    )
             if isinstance(exc, UmbraAcqueError):
                 raise
             if isinstance(exc, PlaywrightTimeoutError):

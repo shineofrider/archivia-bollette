@@ -161,7 +161,7 @@ Non servono username o password Umbra Acque: il link contenuto nell'email porta 
     UMBRA_AUTOMATION_ENABLED=true
     UMBRA_DEBUG_SCREENSHOT=true
 
-Per i successivi utilizzi si può lasciare UMBRA_DEBUG_SCREENSHOT=false. In caso di errore, quando il debug è attivo viene salvato /data/tmp/umbra-error.png.
+Per i successivi utilizzi si può lasciare UMBRA_DEBUG_SCREENSHOT=false. In caso di errore, quando il debug è attivo vengono salvati /data/tmp/umbra-error.png e /data/tmp/umbra-error.txt. Viene inoltre creato /data/tmp/umbra-network-diagnostic.json con inventario aggregato delle richieste di rete: host, percorso redatto, tipo risorsa, metodo, stato HTTP, richieste fallite, nomi cookie e domini, host di script/iframe. Non vengono salvati query string, fragment, header, corpi delle richieste/risposte, valori dei cookie o testo della bolletta. Gli identificativi lunghi nei percorsi vengono oscurati. La diagnostica serve a identificare eventuali analytics, pixel e servizi terzi prima di decidere se bloccarli; in questa fase non viene bloccato automaticamente alcun dominio.
 
 Il link email è un riferimento di accesso alla fattura: non copiarlo nei log, non pubblicarlo e non condividerlo.
 

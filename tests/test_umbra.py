@@ -13,6 +13,9 @@ from app.umbra import (
     COOKIEBOT_DIALOG_SELECTOR,
     COOKIEBOT_REJECT_SELECTORS,
     _contains_umbra_cookie_banner_text,
+    _safe_network_url,
+    _is_umbra_first_party,
+    _new_umbra_network_tracker,
     extract_umbra_invoice_link,
     parse_umbra_invoice_text,
 )
@@ -342,3 +345,84 @@ def test_consent_diagnostics_include_cookie_scope_but_never_values():
     assert "visitId" in text
     assert "MUST_NOT_APPEAR_IN_DIAGNOSTICS" not in text
     assert "secret-token" not in text
+
+
+
+def test_safe_network_url_redacts_invoice_tokens_query_and_fragment():
+    safe = _safe_network_url(
+        "https://bollettainterattiva.umbraacque.com/mi/secret-invoice-id"
+        "?session=secret-query#/private-route"
+    )
+
+    assert safe == {
+        "scheme": "https",
+        "host": "bollettainterattiva.umbraacque.com",
+        "path": "/mi/<redacted>",
+    }
+    assert "secret" not in repr(safe)
+
+
+def test_network_first_party_classifier_uses_umbraacque_registrable_domain():
+    assert _is_umbra_first_party("bollettainterattiva.umbraacque.com")
+    assert _is_umbra_first_party("www.umbraacque.com")
+    assert not _is_umbra_first_party("www.google-analytics.com")
+    assert not _is_umbra_first_party("umbraacque.com.evil.example")
+
+
+class FakeNetworkPage:
+    def __init__(self):
+        self.listeners = {}
+
+    def on(self, event, callback):
+        self.listeners.setdefault(event, []).append(callback)
+
+
+class FakeNetworkContext:
+    def __init__(self):
+        self.listeners = {}
+
+    def on(self, event, callback):
+        self.listeners.setdefault(event, []).append(callback)
+
+
+class FakeNetworkRequest:
+    def __init__(self, url, resource_type="xhr", method="GET"):
+        self.url = url
+        self.resource_type = resource_type
+        self.method = method
+
+
+class FakeNetworkResponse:
+    def __init__(self, url, status=200, headers=None):
+        self.url = url
+        self.status = status
+        self.headers = headers or {}
+
+
+def test_network_tracker_records_domains_and_cookie_names_without_secret_values():
+    context = FakeNetworkContext()
+    page = FakeNetworkPage()
+    tracker, attach = _new_umbra_network_tracker(context)
+    attach(page)
+
+    request_callback = page.listeners["request"][0]
+    response_callback = page.listeners["response"][0]
+    request_callback(FakeNetworkRequest(
+        "https://bollettainterattiva.umbraacque.com/mi/invoice-private-token?secret=value"
+    ))
+    request_callback(FakeNetworkRequest(
+        "https://www.google-analytics.com/g/collect?v=secret",
+        resource_type="xhr",
+    ))
+    response_callback(FakeNetworkResponse(
+        "https://bollettainterattiva.umbraacque.com/api/session",
+        headers={"set-cookie": "session_secret=never-store-this; Path=/; HttpOnly"},
+    ))
+
+    rows = list(tracker["requests"].values())
+    assert any(row["host"] == "bollettainterattiva.umbraacque.com" for row in rows)
+    assert any(row["host"] == "www.google-analytics.com" and row["third_party"] for row in rows)
+    assert tracker["set_cookie_names"] == ["session_secret"]
+    assert "invoice-private-token" not in repr(tracker)
+    assert "never-store-this" not in repr(tracker)
+    assert "secret=value" not in repr(tracker)
