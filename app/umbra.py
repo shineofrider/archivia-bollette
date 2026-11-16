@@ -303,10 +303,12 @@ def _dismiss_umbra_tutorial(page) -> bool:
     return True
 
 
-def _save_umbra_diagnostics(page, output_dir: Path) -> None:
+def _save_umbra_diagnostics(
+    page, output_dir: Path, prefix: str = "umbra-error"
+) -> None:
     """Save screenshot and rendered text locally; never persist the secret invoice URL."""
-    screenshot = output_dir / "umbra-error.png"
-    text_file = output_dir / "umbra-error.txt"
+    screenshot = output_dir / f"{prefix}.png"
+    text_file = output_dir / f"{prefix}.txt"
     try:
         output_dir.mkdir(parents=True, exist_ok=True)
         page.screenshot(path=str(screenshot), full_page=True)

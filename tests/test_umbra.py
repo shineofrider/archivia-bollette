@@ -6,6 +6,7 @@ from app.umbra import (
     UmbraAcqueError,
     UMBRA_TUTORIAL_CLOSE_LABEL,
     _dismiss_umbra_tutorial,
+    _is_optional_cookie_label,
     extract_umbra_invoice_link,
     parse_umbra_invoice_text,
 )
@@ -159,3 +160,13 @@ def test_umbra_tutorial_dismiss_is_noop_when_tutorial_is_absent():
 
     assert _dismiss_umbra_tutorial(page) is False
     assert page.locator_instance.clicked is False
+
+
+
+def test_cookie_preference_label_classifies_only_optional_tracking_categories():
+    assert _is_optional_cookie_label("Cookie analitici")
+    assert _is_optional_cookie_label("Statistiche")
+    assert _is_optional_cookie_label("Marketing e pubblicità")
+    assert _is_optional_cookie_label("Partner social media")
+    assert not _is_optional_cookie_label("Cookie tecnici necessari")
+    assert not _is_optional_cookie_label("Gestione sessione")
