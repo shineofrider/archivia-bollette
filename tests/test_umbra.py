@@ -422,7 +422,7 @@ def test_network_tracker_records_domains_and_cookie_names_without_secret_values(
     rows = list(tracker["requests"].values())
     assert any(row["host"] == "bollettainterattiva.umbraacque.com" for row in rows)
     assert any(row["host"] == "www.google-analytics.com" and row["third_party"] for row in rows)
-    assert tracker["set_cookie_names"] == ["session_secret"]
+    assert tracker["cookie_names"] == ["session_secret"]
     assert "invoice-private-token" not in repr(tracker)
     assert "never-store-this" not in repr(tracker)
     assert "secret=value" not in repr(tracker)
