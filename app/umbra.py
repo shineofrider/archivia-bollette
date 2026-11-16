@@ -516,6 +516,89 @@ def _return_to_umbra_invoice_after_cookie_choice(page, origin_url: str) -> None:
         ) from exc
 
 
+def _safe_umbra_page_location(page) -> str:
+    """Return origin/path only, redacting opaque invoice identifiers and fragments."""
+    try:
+        parsed = urlsplit(page.url)
+        path = parsed.path
+        if path.startswith("/mi/"):
+            path = "/mi/<id-redacted>"
+        return f"{parsed.scheme}://{parsed.netloc}{path}"
+    except Exception:  # noqa: BLE001
+        return "<url-unavailable>"
+
+
+def _collect_umbra_consent_state(context, pages: list) -> str:
+    """Collect cookie names/domains and storage key names only; never read values."""
+    lines: list[str] = []
+    try:
+        cookies = context.cookies()
+    except Exception as exc:  # noqa: BLE001
+        cookies = []
+        lines.append(f"cookies_error={type(exc).__name__}")
+
+    lines.append("COOKIES (names/domains/flags only; values deliberately omitted)")
+    for cookie in sorted(cookies, key=lambda item: (item.get("domain", ""), item.get("name", ""))):
+        lines.append(
+            "cookie="
+            + repr({
+                "name": cookie.get("name", ""),
+                "domain": cookie.get("domain", ""),
+                "path": cookie.get("path", ""),
+                "secure": cookie.get("secure", False),
+                "httpOnly": cookie.get("httpOnly", False),
+                "sameSite": cookie.get("sameSite", ""),
+            })
+        )
+
+    for index, page in enumerate(pages):
+        if page is None:
+            continue
+        try:
+            if page.is_closed():
+                continue
+        except Exception:  # noqa: BLE001
+            continue
+
+        lines.append(f"PAGE_{index}_LOCATION={_safe_umbra_page_location(page)}")
+        try:
+            storage = page.evaluate(
+                """() => ({
+                    local: Object.keys(window.localStorage || {}),
+                    session: Object.keys(window.sessionStorage || {})
+                })"""
+            )
+            lines.append(f"PAGE_{index}_LOCAL_STORAGE_KEYS={storage.get('local', [])!r}")
+            lines.append(f"PAGE_{index}_SESSION_STORAGE_KEYS={storage.get('session', [])!r}")
+        except Exception as exc:  # noqa: BLE001
+            lines.append(f"PAGE_{index}_STORAGE_KEYS_ERROR={type(exc).__name__}")
+
+        try:
+            lines.append(
+                f"PAGE_{index}_CUSTOM_BANNER_VISIBLE="
+                f"{_visible_umbra_cookie_banner(page)}"
+            )
+        except Exception:  # noqa: BLE001
+            pass
+
+    return "\n".join(lines) + "\n"
+
+
+def _save_umbra_consent_state(context, pages: list, output_dir: Path) -> Path:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    path = output_dir / "umbra-consent-state.txt"
+    path.write_text(
+        _collect_umbra_consent_state(context, pages),
+        encoding="utf-8",
+    )
+    log.warning(
+        "Diagnostica consenso Umbra Acque salvata in %s "
+        "(nomi/domìni cookie e chiavi storage; valori esclusi)",
+        path,
+    )
+    return path
+
+
 def _manage_umbra_cookie_consent(page, output_dir: Path) -> None:
     """Use Cookiebot's explicit Rifiuta action; never accept all or close the banner."""
     body_text = page.locator("body").inner_text(timeout=10000)
@@ -551,6 +634,7 @@ def _manage_umbra_cookie_consent(page, output_dir: Path) -> None:
 
     origin_url = page.url
     opened_pages = []
+    consent_context = page.context
     page.context.on("page", lambda opened: opened_pages.append(opened))
     log.info(
         "Umbra Acque: apro il collegamento alle preferenze cookie (target=%s, destinazione=%s)",
@@ -599,13 +683,19 @@ def _manage_umbra_cookie_consent(page, output_dir: Path) -> None:
         else:
             page.wait_for_timeout(700)
 
+        _save_umbra_consent_state(
+            consent_context,
+            [page, preferences_page],
+            output_dir,
+        )
         if _visible_umbra_cookie_banner(page):
             _save_umbra_diagnostics(
                 page, output_dir, prefix="umbra-cookie-after-reject"
             )
             raise UmbraAcqueError(
-                "Il rifiuto Cookiebot è stato inviato, ma il banner compare ancora sulla "
-                "pagina della fattura. Non procedo al download."
+                "Il rifiuto Cookiebot è stato inviato, ma il banner separato del portale "
+                "fatture è ancora visibile. Ho salvato umbra-consent-state.txt per verificare "
+                "dominio e memorizzazione dei consensi; non procedo al download."
             )
 
         log.info(

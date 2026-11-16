@@ -7,6 +7,8 @@ from app.umbra import (
     UMBRA_TUTORIAL_CLOSE_LABEL,
     _dismiss_umbra_tutorial,
     _cookie_preferences_scope,
+    _safe_umbra_page_location,
+    _collect_umbra_consent_state,
     _is_optional_cookie_label,
     COOKIEBOT_DIALOG_SELECTOR,
     COOKIEBOT_REJECT_SELECTORS,
@@ -279,3 +281,64 @@ def test_umbra_cookie_banner_detector_supports_both_seen_banner_texts():
     assert not _contains_umbra_cookie_banner_text(
         "Bolletta interattiva: quanto devo pagare?"
     )
+
+
+
+class FakeConsentDiagnosticPage:
+    def __init__(self, url):
+        self.url = url
+
+    def is_closed(self):
+        return False
+
+    def evaluate(self, script):
+        return {"local": ["cookieConsent", "portalState"], "session": ["visitId"]}
+
+    def get_by_text(self, pattern):
+        class HiddenLocator:
+            def count(self):
+                return 0
+        return HiddenLocator()
+
+
+class FakeConsentDiagnosticContext:
+    def cookies(self):
+        return [
+            {
+                "name": "CookieConsent",
+                "domain": ".umbraacque.com",
+                "path": "/",
+                "value": "MUST_NOT_APPEAR_IN_DIAGNOSTICS",
+                "secure": True,
+                "httpOnly": False,
+                "sameSite": "Lax",
+            }
+        ]
+
+
+def test_safe_invoice_location_redacts_opaque_link_token():
+    page = FakeConsentDiagnosticPage(
+        "https://bollettainterattiva.umbraacque.com/mi/secret-token#/"
+    )
+
+    safe = _safe_umbra_page_location(page)
+
+    assert safe == "https://bollettainterattiva.umbraacque.com/mi/<id-redacted>"
+    assert "secret-token" not in safe
+
+
+def test_consent_diagnostics_include_cookie_scope_but_never_values():
+    text = _collect_umbra_consent_state(
+        FakeConsentDiagnosticContext(),
+        [FakeConsentDiagnosticPage(
+            "https://bollettainterattiva.umbraacque.com/mi/secret-token#/"
+        )],
+    )
+
+    assert "CookieConsent" in text
+    assert ".umbraacque.com" in text
+    assert "cookieConsent" in text
+    assert "portalState" in text
+    assert "visitId" in text
+    assert "MUST_NOT_APPEAR_IN_DIAGNOSTICS" not in text
+    assert "secret-token" not in text
