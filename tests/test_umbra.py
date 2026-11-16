@@ -9,6 +9,7 @@ from app.umbra import (
     _cookie_preferences_scope,
     _safe_umbra_page_location,
     _collect_umbra_consent_state,
+    _continue_after_cookie_rejection,
     _is_optional_cookie_label,
     COOKIEBOT_DIALOG_SELECTOR,
     COOKIEBOT_REJECT_SELECTORS,
@@ -480,3 +481,35 @@ def test_umbra_tracking_block_is_narrow_to_exact_fingerprintjs_version():
     assert _umbra_tracking_block_reason(
         "https://cdn.jsdelivr.net/npm/@fingerprintjs/fingerprintjs@3.0.6/dist/fp.min.js.map"
     ) is None
+
+
+
+def test_after_explicit_cookie_rejection_residual_banner_is_left_untouched_and_download_can_continue(
+    monkeypatch, tmp_path, caplog
+):
+    diagnostics = []
+    monkeypatch.setattr("app.umbra._visible_umbra_cookie_banner", lambda page: True)
+    monkeypatch.setattr(
+        "app.umbra._save_umbra_diagnostics",
+        lambda page, output_dir, prefix: diagnostics.append(prefix),
+    )
+
+    assert _continue_after_cookie_rejection(object(), tmp_path) is True
+
+    assert diagnostics == ["umbra-cookie-after-reject"]
+    assert "senza cliccare 'Chiudi'" in caplog.text
+    assert "autorizzazione esplicita dell'utente" in caplog.text
+
+
+def test_after_explicit_cookie_rejection_no_residual_banner_needs_no_interaction(
+    monkeypatch, tmp_path
+):
+    diagnostics = []
+    monkeypatch.setattr("app.umbra._visible_umbra_cookie_banner", lambda page: False)
+    monkeypatch.setattr(
+        "app.umbra._save_umbra_diagnostics",
+        lambda page, output_dir, prefix: diagnostics.append(prefix),
+    )
+
+    assert _continue_after_cookie_rejection(object(), tmp_path) is False
+    assert diagnostics == []

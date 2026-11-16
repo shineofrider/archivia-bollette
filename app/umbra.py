@@ -421,6 +421,20 @@ def _visible_umbra_cookie_banner(page) -> bool:
     return False
 
 
+def _continue_after_cookie_rejection(page, output_dir: Path) -> bool:
+    """Leave the portal's residual notice untouched and continue after explicit opt-out."""
+    if not _visible_umbra_cookie_banner(page):
+        return False
+
+    _save_umbra_diagnostics(page, output_dir, prefix="umbra-cookie-after-reject")
+    log.warning(
+        "Umbra Acque: rifiuto dei cookie opzionali completato; il banner separato del portale "
+        "resta visibile. Proseguo verso il download senza cliccare 'Chiudi' "
+        "(autorizzazione esplicita dell'utente)."
+    )
+    return True
+
+
 def _click_cookiebot_reject(page) -> bool:
     """Use Cookiebot's documented opt-out control before any generic text fallback."""
     for selector in COOKIEBOT_REJECT_SELECTORS:
@@ -689,18 +703,9 @@ def _manage_umbra_cookie_consent(page, output_dir: Path) -> None:
             [page, preferences_page],
             output_dir,
         )
-        if _visible_umbra_cookie_banner(page):
-            _save_umbra_diagnostics(
-                page, output_dir, prefix="umbra-cookie-after-reject"
-            )
-            raise UmbraAcqueError(
-                "Il rifiuto Cookiebot è stato inviato, ma il banner separato del portale "
-                "fatture è ancora visibile. Ho salvato umbra-consent-state.txt per verificare "
-                "dominio e memorizzazione dei consensi; non procedo al download."
-            )
-
+        _continue_after_cookie_rejection(page, output_dir)
         log.info(
-            "Umbra Acque: consenso limitato ai cookie necessari; pagina della fattura ripristinata"
+            "Umbra Acque: rifiuto Cookiebot completato; continuo con il download della fattura"
         )
         return
 
@@ -717,14 +722,8 @@ def _manage_umbra_cookie_consent(page, output_dir: Path) -> None:
             if is_popup or page.url != origin_url:
                 _return_to_umbra_invoice_after_cookie_choice(page, origin_url)
 
-            if _visible_umbra_cookie_banner(page):
-                _save_umbra_diagnostics(
-                    page, output_dir, prefix="umbra-cookie-after-reject"
-                )
-                raise UmbraAcqueError(
-                    "Il comando di rifiuto cookie è stato selezionato, ma il banner è ancora visibile"
-                )
-            log.info("Umbra Acque: cookie opzionali rifiutati tramite comando esplicito")
+            _continue_after_cookie_rejection(page, output_dir)
+            log.info("Umbra Acque: cookie opzionali rifiutati; continuo con il download")
             return
 
         changed, labels = _disable_optional_cookie_checkboxes(scope)
@@ -737,15 +736,9 @@ def _manage_umbra_cookie_consent(page, output_dir: Path) -> None:
                     pass
             if is_popup or page.url != origin_url:
                 _return_to_umbra_invoice_after_cookie_choice(page, origin_url)
-            if _visible_umbra_cookie_banner(page):
-                _save_umbra_diagnostics(
-                    page, output_dir, prefix="umbra-cookie-after-reject"
-                )
-                raise UmbraAcqueError(
-                    "Le categorie opzionali sono state disattivate, ma il banner è ancora visibile"
-                )
+            _continue_after_cookie_rejection(page, output_dir)
             log.info(
-                "Umbra Acque: disattivate categorie cookie opzionali (%d): %s",
+                "Umbra Acque: disattivate categorie cookie opzionali (%d): %s; continuo con il download",
                 changed,
                 labels,
             )
