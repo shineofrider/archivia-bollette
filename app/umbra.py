@@ -1010,55 +1010,79 @@ def _save_umbra_diagnostics(
 
 
 def _umbra_download_click_target(page, text_locator, output_dir: Path):
-    """Resolve the real clickable control around the visible download label."""
+    """Resolve the PDF link/button beside the label and save a token-safe DOM inventory."""
     details = text_locator.evaluate(
         """el => {
-            const clickable = 'a,button,[role="button"],[onclick],[tabindex]';
+            const semantic = 'a,button,[role="button"],[onclick],[tabindex]';
             const visible = node => {
                 const r = node.getBoundingClientRect();
                 const s = getComputedStyle(node);
                 return r.width > 0 && r.height > 0 &&
                     s.display !== "none" && s.visibility !== "hidden";
             };
-            const safeHref = node => {
-                const raw = node.getAttribute("href");
+            const safeUrl = raw => {
                 if (!raw) return "";
                 try {
                     const u = new URL(raw, location.href);
                     if (!["http:", "https:"].includes(u.protocol)) return "<non-http-link>";
                     const parts = u.pathname.split("/");
                     for (let i = 0; i < parts.length; i++) {
-                        if ((i === 2 && parts[1] === "mi") || parts[i].length >= 24 ||
-                            (/^[0-9]{7,}$/.test(parts[i]))) parts[i] = "<redacted>";
+                        if ((i === 2 && parts[1] === "mi") ||
+                            parts[i].length >= 24 || /^[0-9]{7,}$/.test(parts[i])) {
+                            parts[i] = "<redacted>";
+                        }
                     }
                     return u.origin + parts.join("/");
                 } catch (_) {
                     return "<invalid-link>";
                 }
             };
-            const describe = node => ({
-                tag: node.tagName.toLowerCase(),
-                role: node.getAttribute("role") || "",
-                type: node.getAttribute("type") || "",
-                className: (typeof node.className === "string" ? node.className : "").slice(0, 160),
-                ariaLabel: (node.getAttribute("aria-label") || "").slice(0, 120),
-                title: (node.getAttribute("title") || "").slice(0, 120),
-                href: safeHref(node),
-                hasOnclick: node.hasAttribute("onclick"),
-                tabindex: node.getAttribute("tabindex") || "",
-                visible: visible(node)
-            });
+            const describe = node => {
+                const s = getComputedStyle(node);
+                const r = node.getBoundingClientRect();
+                return {
+                    tag: node.tagName.toLowerCase(),
+                    id: (node.id || "").slice(0, 100),
+                    role: node.getAttribute("role") || "",
+                    type: node.getAttribute("type") || "",
+                    className: (typeof node.className === "string" ? node.className : "").slice(0, 180),
+                    ariaLabel: (node.getAttribute("aria-label") || "").slice(0, 120),
+                    title: (node.getAttribute("title") || "").slice(0, 120),
+                    alt: (node.getAttribute("alt") || "").slice(0, 100),
+                    href: safeUrl(node.getAttribute("href")),
+                    downloadAttribute: node.hasAttribute("download"),
+                    hasOnclick: node.hasAttribute("onclick"),
+                    tabindex: node.getAttribute("tabindex") || "",
+                    cursor: s.cursor,
+                    pointerEvents: s.pointerEvents,
+                    visible: visible(node),
+                    rect: {
+                        x: Math.round(r.x), y: Math.round(r.y),
+                        width: Math.round(r.width), height: Math.round(r.height)
+                    }
+                };
+            };
             const cssPath = node => {
                 const parts = [];
                 let current = node;
                 while (current && current.nodeType === Node.ELEMENT_NODE &&
                        current !== document.documentElement) {
                     let part = current.tagName.toLowerCase();
+                    if (current.id) {
+                        part += "#" + CSS.escape(current.id);
+                        parts.unshift(part);
+                        break;
+                    }
                     if (current.parentElement) {
                         const same = Array.from(current.parentElement.children)
                             .filter(x => x.tagName === current.tagName);
                         if (same.length > 1) part += ':nth-of-type(' +
                             (same.indexOf(current) + 1) + ')';
+                    }
+                    if (typeof current.className === "string" && current.className.trim()) {
+                        const cls = current.className.trim().split(/\s+/)
+                            .filter(x => /^[A-Za-z_-][A-Za-z0-9_-]*$/.test(x)).slice(0, 2);
+                        if (cls.length) part += "." + cls.map(CSS.escape).join(".");
                     }
                     parts.unshift(part);
                     current = current.parentElement;
@@ -1068,35 +1092,65 @@ def _umbra_download_click_target(page, text_locator, output_dir: Path):
 
             const ancestors = [];
             let current = el;
-            let nearest = null;
-            let adjacent = null;
-            for (let depth = 0; current && depth < 6; depth++, current = current.parentElement) {
+            for (let depth = 0; current && depth < 7; depth++, current = current.parentElement) {
                 ancestors.push(describe(current));
-                if (!nearest && current.matches(clickable)) {
-                    nearest = current;
-                    break;
-                }
-                if (!adjacent) {
-                    const candidates = Array.from(current.querySelectorAll(clickable))
-                        .filter(node => node !== el && visible(node));
-                    adjacent = candidates.find(node => {
-                        const label = [
-                            node.getAttribute("aria-label") || "",
-                            node.getAttribute("title") || "",
-                            node.innerText || "",
-                            node.querySelector("img")?.getAttribute("alt") || ""
-                        ].join(" ");
-                        return /scarica|download|pdf/i.test(label);
-                    }) || null;
+            }
+            const root = el.closest(".c-downloads__wrapper") ||
+                el.closest(".c-downloads__body") || el.parentElement;
+            const rootInfo = root ? describe(root) : null;
+            const descendants = root
+                ? Array.from(root.querySelectorAll("*")).filter(visible).slice(0, 80)
+                : [];
+            const controls = descendants
+                .filter(node => node.matches(semantic) || getComputedStyle(node).cursor === "pointer")
+                .map(node => ({
+                    ...describe(node),
+                    selector: cssPath(node),
+                    outsideLabel: !node.contains(el) && node !== el
+                }));
+
+            const nearestSemantic = el.closest(semantic);
+            let chosen = nearestSemantic;
+            let selectedBy = nearestSemantic ? "semantic ancestor" : "";
+            if (!chosen && root) {
+                const candidates = descendants.filter(node =>
+                    node !== el && !node.contains(el) &&
+                    (node.matches(semantic) || getComputedStyle(node).cursor === "pointer")
+                );
+                const score = node => {
+                    const d = describe(node);
+                    const wording = [
+                        d.className, d.ariaLabel, d.title, d.alt, d.href
+                    ].join(" ").toLowerCase();
+                    let value = 0;
+                    if (d.downloadAttribute) value += 100;
+                    if (/scarica|download|pdf|fattura/.test(wording)) value += 50;
+                    if (d.href && d.href !== "<invalid-link>" &&
+                        /\\.pdf(?:$|[?#])|download|scarica|fattur/i.test(d.href)) value += 30;
+                    if (node.matches("a,button,[role='button'],[onclick]")) value += 10;
+                    if (d.cursor === "pointer") value += 5;
+                    return value;
+                };
+                const ranked = candidates.map(node => ({node, score: score(node)}))
+                    .sort((a, b) => b.score - a.score);
+                if (ranked.length && ranked[0].score > 0 &&
+                    (ranked.length === 1 || ranked[0].score > ranked[1].score)) {
+                    chosen = ranked[0].node;
+                    selectedBy = "unique or highest-ranked control inside downloads wrapper";
                 }
             }
-            const target = nearest || adjacent;
+            if (!chosen && root && getComputedStyle(root).cursor === "pointer") {
+                chosen = root;
+                selectedBy = "downloads wrapper has pointer cursor";
+            }
+
             return {
                 ancestors,
-                selectedBy: nearest ? "clickable ancestor" :
-                    (adjacent ? "labelled adjacent control" : "visible text"),
-                target: target ? describe(target) : null,
-                selector: target ? cssPath(target) : ""
+                root: rootInfo,
+                controls,
+                selectedBy: selectedBy || "visible text only",
+                target: chosen ? describe(chosen) : null,
+                selector: chosen ? cssPath(chosen) : ""
             };
         }"""
     )
@@ -1127,7 +1181,7 @@ def _umbra_download_click_target(page, text_locator, output_dir: Path):
             )
 
     log.warning(
-        "Umbra Acque: nessun elemento cliccabile associato al testo download; "
+        "Umbra Acque: nessun controllo download univoco nel contenitore; "
         "uso il testo visibile. Dettagli in /data/tmp/umbra-download-control.txt"
     )
     return text_locator
