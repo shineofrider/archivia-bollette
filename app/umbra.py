@@ -1009,6 +1009,130 @@ def _save_umbra_diagnostics(
         )
 
 
+def _umbra_download_click_target(page, text_locator, output_dir: Path):
+    """Resolve the real clickable control around the visible download label."""
+    details = text_locator.evaluate(
+        """el => {
+            const clickable = 'a,button,[role="button"],[onclick],[tabindex]';
+            const visible = node => {
+                const r = node.getBoundingClientRect();
+                const s = getComputedStyle(node);
+                return r.width > 0 && r.height > 0 &&
+                    s.display !== "none" && s.visibility !== "hidden";
+            };
+            const safeHref = node => {
+                const raw = node.getAttribute("href");
+                if (!raw) return "";
+                try {
+                    const u = new URL(raw, location.href);
+                    if (!["http:", "https:"].includes(u.protocol)) return "<non-http-link>";
+                    const parts = u.pathname.split("/");
+                    for (let i = 0; i < parts.length; i++) {
+                        if ((i === 2 && parts[1] === "mi") || parts[i].length >= 24 ||
+                            (/^[0-9]{7,}$/.test(parts[i]))) parts[i] = "<redacted>";
+                    }
+                    return u.origin + parts.join("/");
+                } catch (_) {
+                    return "<invalid-link>";
+                }
+            };
+            const describe = node => ({
+                tag: node.tagName.toLowerCase(),
+                role: node.getAttribute("role") || "",
+                type: node.getAttribute("type") || "",
+                className: (typeof node.className === "string" ? node.className : "").slice(0, 160),
+                ariaLabel: (node.getAttribute("aria-label") || "").slice(0, 120),
+                title: (node.getAttribute("title") || "").slice(0, 120),
+                href: safeHref(node),
+                hasOnclick: node.hasAttribute("onclick"),
+                tabindex: node.getAttribute("tabindex") || "",
+                visible: visible(node)
+            });
+            const cssPath = node => {
+                const parts = [];
+                let current = node;
+                while (current && current.nodeType === Node.ELEMENT_NODE &&
+                       current !== document.documentElement) {
+                    let part = current.tagName.toLowerCase();
+                    if (current.parentElement) {
+                        const same = Array.from(current.parentElement.children)
+                            .filter(x => x.tagName === current.tagName);
+                        if (same.length > 1) part += ':nth-of-type(' +
+                            (same.indexOf(current) + 1) + ')';
+                    }
+                    parts.unshift(part);
+                    current = current.parentElement;
+                }
+                return parts.join(" > ");
+            };
+
+            const ancestors = [];
+            let current = el;
+            let nearest = null;
+            let adjacent = null;
+            for (let depth = 0; current && depth < 6; depth++, current = current.parentElement) {
+                ancestors.push(describe(current));
+                if (!nearest && current.matches(clickable)) {
+                    nearest = current;
+                    break;
+                }
+                if (!adjacent) {
+                    const candidates = Array.from(current.querySelectorAll(clickable))
+                        .filter(node => node !== el && visible(node));
+                    adjacent = candidates.find(node => {
+                        const label = [
+                            node.getAttribute("aria-label") || "",
+                            node.getAttribute("title") || "",
+                            node.innerText || "",
+                            node.querySelector("img")?.getAttribute("alt") || ""
+                        ].join(" ");
+                        return /scarica|download|pdf/i.test(label);
+                    }) || null;
+                }
+            }
+            const target = nearest || adjacent;
+            return {
+                ancestors,
+                selectedBy: nearest ? "clickable ancestor" :
+                    (adjacent ? "labelled adjacent control" : "visible text"),
+                target: target ? describe(target) : null,
+                selector: target ? cssPath(target) : ""
+            };
+        }"""
+    )
+    output_dir.mkdir(parents=True, exist_ok=True)
+    (output_dir / "umbra-download-control.txt").write_text(
+        json.dumps(details, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+    selector = str(details.get("selector") or "").strip()
+    if selector:
+        try:
+            candidate = page.locator(selector).last
+            if candidate.count() and candidate.is_visible():
+                target = details.get("target") or {}
+                log.info(
+                    "Umbra Acque: controllo download individuato (%s, tag=%s, classe=%s)",
+                    details.get("selectedBy", "selettore DOM"),
+                    target.get("tag", "n/d"),
+                    target.get("className", "")[:80],
+                )
+                return candidate
+        except Exception as exc:  # noqa: BLE001
+            log.warning(
+                "Umbra Acque: selettore del controllo download non utilizzabile (%s); "
+                "uso il testo visibile",
+                type(exc).__name__,
+            )
+
+    log.warning(
+        "Umbra Acque: nessun elemento cliccabile associato al testo download; "
+        "uso il testo visibile. Dettagli in /data/tmp/umbra-download-control.txt"
+    )
+    return text_locator
+
+
 def download_umbra_invoice(
     invoice_url: str,
     output_dir: Path,
@@ -1061,9 +1185,12 @@ def download_umbra_invoice(
             ).last
             download_link.wait_for(state="visible", timeout=timeout)
             page_text = page.locator("body").inner_text(timeout=10000)
+            download_target = _umbra_download_click_target(
+                page, download_link, output_dir
+            )
 
             with page.expect_download(timeout=download_timeout) as download_info:
-                download_link.click(timeout=15000)
+                download_target.click(timeout=15000)
             download = download_info.value
 
             suggested = Path(download.suggested_filename or "umbra-acque-bolletta.pdf").name

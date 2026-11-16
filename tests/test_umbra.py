@@ -513,3 +513,16 @@ def test_after_explicit_cookie_rejection_no_residual_banner_needs_no_interaction
 
     assert _continue_after_cookie_rejection(object(), tmp_path) is False
     assert diagnostics == []
+
+
+
+def test_umbra_download_diagnostic_redacts_invoice_tokens_in_link_paths():
+    safe = _safe_network_url(
+        "https://bollettainterattiva.umbraacque.com/mi/private-invoice-token"
+        "?session=private-value#/download"
+    )
+
+    assert safe["host"] == "bollettainterattiva.umbraacque.com"
+    assert safe["path"] == "/mi/<redacted>"
+    assert "private-invoice-token" not in repr(safe)
+    assert "private-value" not in repr(safe)
