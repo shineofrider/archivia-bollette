@@ -263,6 +263,67 @@ def parse_umbra_invoice_text(text: str) -> UmbraInvoice:
     )
 
 
+UMBRA_TUTORIAL_CLOSE_LABEL = (
+    "Clicca qui per chiudere il tutorial e visualizzare la tua bolletta"
+)
+
+
+def _dismiss_umbra_tutorial(page) -> bool:
+    """Close the first-visit tutorial overlay before locating the PDF download control."""
+    body_text = page.locator("body").inner_text(timeout=10000)
+    if UMBRA_TUTORIAL_CLOSE_LABEL.casefold() not in body_text.casefold():
+        log.info("Tutorial iniziale Umbra Acque non presente")
+        return False
+
+    close_instruction = page.get_by_text(
+        re.compile(re.escape(UMBRA_TUTORIAL_CLOSE_LABEL), re.IGNORECASE)
+    ).last
+    if not close_instruction.count() or not close_instruction.is_visible():
+        raise UmbraAcqueError(
+            "Tutorial iniziale Umbra Acque visualizzato, ma il comando per chiuderlo "
+            "non è individuabile"
+        )
+
+    close_instruction.click(timeout=10000)
+    try:
+        close_instruction.wait_for(state="hidden", timeout=10000)
+    except PlaywrightTimeoutError as exc:
+        raise UmbraAcqueError(
+            "Il clic sul comando di chiusura del tutorial Umbra Acque non lo ha chiuso"
+        ) from exc
+
+    page.wait_for_timeout(700)
+    remaining_text = page.locator("body").inner_text(timeout=10000)
+    if UMBRA_TUTORIAL_CLOSE_LABEL.casefold() in remaining_text.casefold():
+        raise UmbraAcqueError(
+            "Il tutorial Umbra Acque risulta ancora visibile dopo il comando di chiusura"
+        )
+
+    log.info("Tutorial iniziale Umbra Acque chiuso; bolletta visualizzata")
+    return True
+
+
+def _save_umbra_diagnostics(page, output_dir: Path) -> None:
+    """Save screenshot and rendered text locally; never persist the secret invoice URL."""
+    screenshot = output_dir / "umbra-error.png"
+    text_file = output_dir / "umbra-error.txt"
+    try:
+        output_dir.mkdir(parents=True, exist_ok=True)
+        page.screenshot(path=str(screenshot), full_page=True)
+        body_text = page.locator("body").inner_text(timeout=5000)
+        text_file.write_text(body_text, encoding="utf-8")
+        log.warning(
+            "Diagnostica Umbra Acque salvata: %s e %s",
+            screenshot,
+            text_file,
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.warning(
+            "Salvataggio diagnostica Umbra Acque non riuscito (%s)",
+            type(exc).__name__,
+        )
+
+
 def download_umbra_invoice(
     invoice_url: str,
     output_dir: Path,
@@ -290,6 +351,9 @@ def download_umbra_invoice(
             page = context.new_page()
             page.set_default_timeout(timeout)
             page.goto(invoice_url, wait_until="domcontentloaded", timeout=timeout)
+            # The first visit can display a full-screen tutorial before the invoice page.
+            page.wait_for_timeout(1200)
+            _dismiss_umbra_tutorial(page)
 
             current_host = (urlsplit(page.url).hostname or "").lower()
             if current_host != UMBRA_HOST:
@@ -323,17 +387,7 @@ def download_umbra_invoice(
 
         except Exception as exc:  # noqa: BLE001
             if debug_screenshot and page is not None:
-                try:
-                    page.screenshot(
-                        path=str(output_dir / "umbra-error.png"),
-                        full_page=True,
-                    )
-                    log.warning(
-                        "Screenshot diagnostico Umbra Acque salvato in %s",
-                        output_dir / "umbra-error.png",
-                    )
-                except Exception:  # noqa: BLE001
-                    pass
+                _save_umbra_diagnostics(page, output_dir)
             if isinstance(exc, UmbraAcqueError):
                 raise
             if isinstance(exc, PlaywrightTimeoutError):

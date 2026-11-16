@@ -4,6 +4,8 @@ import pytest
 
 from app.umbra import (
     UmbraAcqueError,
+    UMBRA_TUTORIAL_CLOSE_LABEL,
+    _dismiss_umbra_tutorial,
     extract_umbra_invoice_link,
     parse_umbra_invoice_text,
 )
@@ -86,3 +88,74 @@ def test_parse_umbra_billing_period_across_year_boundary():
 def test_fail_when_billing_period_is_missing_or_invalid():
     with pytest.raises(UmbraAcqueError, match="Non riesco a ricavare il periodo"):
         parse_umbra_invoice_text("Fattura n. 9026011001234291 Importo 52,79 €")
+
+
+
+class FakeUmbraLocator:
+    def __init__(self, page):
+        self.page = page
+        self.clicked = False
+
+    @property
+    def last(self):
+        return self
+
+    def count(self):
+        return 1 if UMBRA_TUTORIAL_CLOSE_LABEL in self.page.body_text else 0
+
+    def is_visible(self):
+        return self.count() > 0
+
+    def click(self, timeout=None):
+        self.clicked = True
+        self.page.body_text = "Ciao. Fattura n. 9026011001234291. Scarica la tua bolletta in pdf."
+
+    def wait_for(self, state=None, timeout=None):
+        if state == "hidden" and self.count() > 0:
+            raise AssertionError("Tutorial should have been dismissed by click")
+
+
+class FakeUmbraBody:
+    def __init__(self, page):
+        self.page = page
+
+    def inner_text(self, timeout=None):
+        return self.page.body_text
+
+
+class FakeUmbraPage:
+    def __init__(self, body_text):
+        self.body_text = body_text
+        self.locator_instance = FakeUmbraLocator(self)
+        self.waits = []
+
+    def locator(self, selector):
+        assert selector == "body"
+        return FakeUmbraBody(self)
+
+    def get_by_text(self, pattern):
+        return self.locator_instance
+
+    def wait_for_timeout(self, milliseconds):
+        self.waits.append(milliseconds)
+
+
+def test_umbra_tutorial_is_closed_before_searching_for_pdf_button():
+    page = FakeUmbraPage(
+        "Tutorial. " + UMBRA_TUTORIAL_CLOSE_LABEL + ". Non mostrare più."
+    )
+
+    assert _dismiss_umbra_tutorial(page) is True
+    assert page.locator_instance.clicked is True
+    assert UMBRA_TUTORIAL_CLOSE_LABEL not in page.body_text
+    assert 700 in page.waits
+
+
+def test_umbra_tutorial_dismiss_is_noop_when_tutorial_is_absent():
+    page = FakeUmbraPage(
+        "Ciao Gianluca. Fattura n. 9026011001234291. "
+        "Scarica la tua bolletta in pdf."
+    )
+
+    assert _dismiss_umbra_tutorial(page) is False
+    assert page.locator_instance.clicked is False

@@ -137,7 +137,8 @@ Il flusso previsto è:
 1. Riconoscere mittente e prefisso dell'oggetto.
 2. Estrarre dal corpo email il link HTTPS che punta esattamente a bollettainterattiva.umbraacque.com. Il link contiene un identificativo opaco della fattura: non viene scritto nei log.
 3. Aprire il link con Chromium/Playwright.
-4. Attendere il comando "Scarica la tua bolletta in pdf" e intercettare il download.
+4. Se compare il tutorial iniziale a schermo intero, cliccare automaticamente su "Clicca qui per chiudere il tutorial e visualizzare la tua bolletta" (senza selezionare "Non mostrare più").
+5. Attendere il comando "Scarica la tua bolletta in pdf" e intercettare il download.
 5. Verificare che il file scaricato sia un PDF.
 6. Leggere periodo, numero fattura, importo e scadenza dalla pagina e, se necessario, dal PDF.
 7. Archiviare in /archive/Acqua con il nome bimestrale e inviare la notifica Home Assistant.
