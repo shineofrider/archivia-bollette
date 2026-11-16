@@ -25,6 +25,7 @@ def load_config() -> dict[str, Any]:
         "archive": Path(os.getenv("ARCHIVE_DIR", "/archive")),
     }
     iren_config = config.get("iren", {})
+    umbra_config = config.get("umbraacque", {})
     login_url = os.getenv("IREN_LOGIN_URL", "").strip() or iren_config.get(
         "login_url", "https://clienti.irenyou.gruppoiren.it/login"
     )
@@ -57,5 +58,8 @@ def load_config() -> dict[str, Any]:
         "iren_download_selector": os.getenv("IREN_DOWNLOAD_SELECTOR", "").strip(),
         "iren_debug_screenshot": env_bool("IREN_DEBUG_SCREENSHOT", False),
         "iren_retry_seconds": int(os.getenv("IREN_RETRY_SECONDS", 21600)),
+        "umbra_enabled": env_bool("UMBRA_AUTOMATION_ENABLED", False),
+        "umbra_debug_screenshot": env_bool("UMBRA_DEBUG_SCREENSHOT", False),
+        "umbra_retry_seconds": int(os.getenv("UMBRA_RETRY_SECONDS", 21600)),
     }
     return config

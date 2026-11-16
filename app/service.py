@@ -8,6 +8,13 @@ from .database import Database
 from .iren import IrenInvoice, sync_iren_invoices
 from .mail import GmailImapClient, MailItem
 from .notifications import HomeAssistantNotifier
+from .pdf_utils import validate_and_extract_text
+from .umbra import (
+    UmbraAcqueError,
+    download_umbra_invoice,
+    extract_umbra_invoice_link,
+    parse_umbra_invoice_text,
+)
 
 log = logging.getLogger(__name__)
 ALPERIA_SUBJECT_PREFIX = "Nuova fattura disponibile"
@@ -72,14 +79,14 @@ def _matching_provider(item: MailItem, providers: dict) -> tuple[str, dict] | No
     for provider, rule in providers.items():
         if item.sender.strip().casefold() != str(rule.get("sender", "")).strip().casefold():
             continue
-        if provider == "alperia":
-            prefix = str(rule.get("subject_prefix", ALPERIA_SUBJECT_PREFIX)).strip()
+        prefix = str(rule.get("subject_prefix", ""))
+        if prefix:
             if item.subject.strip().casefold().startswith(prefix.casefold()):
                 return provider, rule
-        else:
-            expected = str(rule.get("subject_exact", "")).strip()
-            if item.subject.strip().casefold() == expected.casefold():
-                return provider, rule
+            continue
+        expected = str(rule.get("subject_exact", "")).strip()
+        if expected and item.subject.strip().casefold() == expected.casefold():
+            return provider, rule
     return None
 
 
@@ -132,6 +139,8 @@ def _archive_pdf(
     archiver: PdfArchiver, database: Database, notifier: HomeAssistantNotifier,
     notification_suffix: str = "",
     notification_extra: dict[str, str] | None = None,
+    archive_filename: str | None = None,
+    period_key: str | None = None,
 ) -> Path:
     result = archiver.save(
         provider=provider,
@@ -140,6 +149,8 @@ def _archive_pdf(
         content=content,
         email_date=item.date,
         message_key=item.key,
+        target_filename=archive_filename,
+        period_key=period_key,
     )
     database.add_document(
         result.digest, provider, f"{result.year:04d}_{result.month:02d}",
@@ -148,9 +159,10 @@ def _archive_pdf(
     if result.duplicate:
         log.info("Documento già archiviato (SHA-256 già presente): %s", result.path)
         return result.path
-    period = f"{result.year:04d}_{result.month:02d}"
-    message = f"{provider.capitalize()}: bolletta {period} archiviata in {result.path.name}"
-    if result.period_source == "data-email-fallback":
+    period = period_key or f"{result.year:04d}_{result.month:02d}"
+    provider_name = str(rule.get("display_name", provider.capitalize()))
+    message = f"{provider_name}: bolletta {period} archiviata in {result.path.name}"
+    if not period_key and result.period_source == "data-email-fallback":
         message += " (periodo non letto dal PDF: utilizzata la data dell'email)"
     if notification_suffix:
         message += "\n" + notification_suffix
@@ -165,11 +177,18 @@ def _archive_pdf(
 
 def _log_test_scan(provider: str, item: MailItem, matched: bool, database: Database) -> None:
     pdf_names = [name for name, _ in _pdf_attachments(item)]
+    link_found = None
+    if provider == "umbraacque" and matched:
+        try:
+            extract_umbra_invoice_link(item.raw_message)
+            link_found = True
+        except UmbraAcqueError:
+            link_found = False
     log.info(
         "[TEST SCAN] fornitore=%s uid=%s riconosciuta=%s stato_db=%s "
-        "mittente=%r oggetto=%r allegati=%d pdf=%s",
+        "mittente=%r oggetto=%r allegati=%d pdf=%s link_portale=%s",
         provider, item.uid, matched, database.message_status(item.key),
-        item.sender, item.subject, len(item.attachments), pdf_names,
+        item.sender, item.subject, len(item.attachments), pdf_names, link_found,
     )
 
 
@@ -243,6 +262,59 @@ def _process_iren_portal(
     log.info(detail)
 
 
+def _process_umbra_acque(
+    item: MailItem,
+    rule: dict,
+    runtime: dict,
+    config: dict,
+    data_dir: Path,
+    archiver: PdfArchiver,
+    database: Database,
+    notifier: HomeAssistantNotifier,
+) -> None:
+    invoice_url = extract_umbra_invoice_link(item.raw_message)
+    result = download_umbra_invoice(
+        invoice_url,
+        data_dir / "tmp",
+        config,
+        debug_screenshot=bool(runtime.get("umbra_debug_screenshot")),
+    )
+    pdf_text = validate_and_extract_text(result.content)
+    # Prefer portal data and use the downloaded PDF as a fallback source.
+    invoice = parse_umbra_invoice_text(result.page_text + "\n" + pdf_text)
+    notification_suffix, notification_extra = invoice.notification_details()
+
+    saved_path = _archive_pdf(
+        result.content,
+        result.suggested_filename or invoice.filename,
+        "umbraacque",
+        rule,
+        item,
+        archiver,
+        database,
+        notifier,
+        notification_suffix=notification_suffix,
+        notification_extra=notification_extra,
+        archive_filename=invoice.filename,
+        period_key=invoice.period_key,
+    )
+    database.set_message(
+        item.key,
+        "umbraacque",
+        "done",
+        f"PDF acquisito e archiviato: {saved_path.name}",
+        item.message_id,
+        item.uid,
+    )
+    log.info(
+        "Umbra Acque UID %s completata: %s (importo=%s, scadenza=%s)",
+        item.uid,
+        saved_path,
+        invoice.amount or "non rilevato",
+        invoice.due_date or "non rilevata",
+    )
+
+
 def process_cycle(config: dict) -> None:
     runtime = config["runtime"]
     providers = config.get("providers", {})
@@ -258,8 +330,12 @@ def process_cycle(config: dict) -> None:
     force_test = bool(runtime.get("test_force_reprocess", False))
     if test_mode not in {"off", "scan", "process", "notify"}:
         raise ValueError("TEST_MODE deve essere off, scan, process oppure notify")
-    if test_provider not in {"all", "alperia", "iren"}:
-        raise ValueError("TEST_PROVIDER deve essere all, alperia oppure iren")
+    valid_test_providers = {"all", *providers.keys()}
+    if test_provider not in valid_test_providers:
+        raise ValueError(
+            "TEST_PROVIDER deve essere all oppure uno dei fornitori configurati: "
+            + ", ".join(sorted(providers))
+        )
     if test_mode == "process" and not test_uid:
         log.error("TEST_MODE=process richiede TEST_UID: non elaboro nessuna email")
         return
@@ -283,24 +359,37 @@ def process_cycle(config: dict) -> None:
         log.info("Ciclo controllo Gmail avviato")
 
     lookback_days = int(config.get("mail", {}).get("lookback_days", 730))
-    searches = (
-        ("alperia", providers["alperia"], str(providers["alperia"].get("subject_prefix", ALPERIA_SUBJECT_PREFIX))),
-        ("iren", providers["iren"], str(providers["iren"]["subject_exact"])),
-    )
+    searches = [
+        (
+            provider,
+            rule,
+            str(rule.get("subject_prefix") or rule.get("subject_exact") or "").strip(),
+        )
+        for provider, rule in providers.items()
+    ]
     seen_test_uid: set[str] = set()
 
     with GmailImapClient(
-        runtime["imap_host"], runtime["imap_port"], runtime["imap_username"],
-        runtime["imap_password"], runtime["imap_folder"],
+        runtime["imap_host"],
+        runtime["imap_port"],
+        runtime["imap_username"],
+        runtime["imap_password"],
+        runtime["imap_folder"],
     ) as client:
         for provider, rule, subject_query in searches:
+            if not subject_query:
+                log.error("Filtro oggetto mancante per il fornitore %s", provider)
+                continue
             if test_mode != "off" and test_provider not in {"all", provider}:
                 continue
 
             candidates = list(client.search(rule["sender"], subject_query, lookback_days))
             log.info(
                 "Gmail %s: %d email candidate (cartella=%s, finestra=%d giorni)",
-                provider.capitalize(), len(candidates), runtime["imap_folder"], lookback_days,
+                rule.get("display_name", provider.capitalize()),
+                len(candidates),
+                runtime["imap_folder"],
+                lookback_days,
             )
 
             for item in candidates:
@@ -328,13 +417,31 @@ def process_cycle(config: dict) -> None:
                     log.warning(
                         "Email ignorata per %s: UID=%s mittente=%r oggetto=%r "
                         "(non rispetta il filtro del fornitore)",
-                        provider, item.uid, item.sender, item.subject,
+                        provider,
+                        item.uid,
+                        item.sender,
+                        item.subject,
                     )
                     continue
 
                 status = database.message_status(item.key)
-                if provider == "iren" and status == "waiting_configuration" and not runtime.get("iren_enabled"):
-                    log.info("Iren UID %s già in attesa di configurazione: nessuna nuova notifica", item.uid)
+                if provider == "iren":
+                    automation_enabled = bool(runtime.get("iren_enabled"))
+                elif provider == "umbraacque":
+                    automation_enabled = bool(runtime.get("umbra_enabled"))
+                else:
+                    automation_enabled = True
+
+                if (
+                    provider in {"iren", "umbraacque"}
+                    and status == "waiting_configuration"
+                    and not automation_enabled
+                ):
+                    log.info(
+                        "%s UID %s già in attesa di configurazione: nessuna nuova notifica",
+                        rule.get("display_name", provider.capitalize()),
+                        item.uid,
+                    )
                     continue
 
                 force_granted = (
@@ -350,16 +457,28 @@ def process_cycle(config: dict) -> None:
                     log.info("%s UID %s già completata: salto", provider.capitalize(), item.uid)
                     continue
 
-                retry_seconds = 3600 if provider == "alperia" else int(
-                    runtime.get("iren_retry_seconds", 21600)
-                )
+                if provider == "alperia":
+                    retry_seconds = 3600
+                elif provider == "iren":
+                    retry_seconds = int(runtime.get("iren_retry_seconds", 21600))
+                elif provider == "umbraacque":
+                    retry_seconds = int(runtime.get("umbra_retry_seconds", 21600))
+                else:
+                    retry_seconds = 21600
+
                 if status != "done" and not force_granted:
-                    if provider == "iren" and status == "waiting_configuration" and runtime.get("iren_enabled"):
+                    if (
+                        provider in {"iren", "umbraacque"}
+                        and status == "waiting_configuration"
+                        and automation_enabled
+                    ):
                         pass
                     elif not database.retry_due(item.key, retry_seconds):
                         log.info(
                             "%s UID %s in attesa del prossimo tentativo (intervallo=%d secondi)",
-                            provider.capitalize(), item.uid, retry_seconds,
+                            rule.get("display_name", provider.capitalize()),
+                            item.uid,
+                            retry_seconds,
                         )
                         continue
 
@@ -367,7 +486,10 @@ def process_cycle(config: dict) -> None:
                     pdfs = _pdf_attachments(item)
                     log.info(
                         "%s UID %s riconosciuta: %d allegati, %d PDF",
-                        provider.capitalize(), item.uid, len(item.attachments), len(pdfs),
+                        rule.get("display_name", provider.capitalize()),
+                        item.uid,
+                        len(item.attachments),
+                        len(pdfs),
                     )
 
                     if provider == "alperia":
@@ -381,40 +503,90 @@ def process_cycle(config: dict) -> None:
                         log.info("Alperia UID %s completata", item.uid)
                         continue
 
-                    if pdfs:
-                        for name, data in pdfs:
-                            _archive_pdf(data, name, "iren", rule, item, archiver, database, notifier)
-                        database.set_message(
-                            item.key, "iren", "done", "PDF allegato acquisito", item.message_id, item.uid
+                    if provider == "iren":
+                        if pdfs:
+                            for name, data in pdfs:
+                                _archive_pdf(data, name, "iren", rule, item, archiver, database, notifier)
+                            database.set_message(
+                                item.key, "iren", "done", "PDF allegato acquisito", item.message_id, item.uid
+                            )
+                            log.info("Iren UID %s completata: PDF presente nell'email", item.uid)
+                            continue
+
+                        if not automation_enabled:
+                            detail = (
+                                "Avviso Iren rilevato. Playwright non avviato: "
+                                "IREN_AUTOMATION_ENABLED=false."
+                            )
+                            log.warning(detail)
+                            database.set_message(
+                                item.key, "iren", "waiting_configuration", detail, item.message_id, item.uid
+                            )
+                            notifier.send(
+                                "Bolletta Iren disponibile",
+                                detail,
+                                provider="iren",
+                                status="in_attesa",
+                            )
+                            continue
+
+                        log.info("Email Iren riconosciuta: avvio sincronizzazione portale e confronto fatture")
+                        _process_iren_portal(
+                            item, rule, runtime, config, data_dir, archiver, database, notifier
                         )
-                        log.info("Iren UID %s completata: PDF presente nell'email", item.uid)
                         continue
 
-                    if not runtime.get("iren_enabled"):
-                        detail = (
-                            "Avviso Iren rilevato. Playwright non avviato: "
-                            "IREN_AUTOMATION_ENABLED=false. Configurare e verificare il portale prima di abilitarlo."
+                    if provider == "umbraacque":
+                        if pdfs:
+                            raise RuntimeError(
+                                "L'email Umbra Acque contiene un allegato PDF inatteso; "
+                                "il flusso configurato prevede il download tramite link al portale"
+                            )
+                        if not automation_enabled:
+                            detail = (
+                                "Avviso Umbra Acque rilevato. Download automatico disabilitato: "
+                                "impostare UMBRA_AUTOMATION_ENABLED=true per abilitare Playwright."
+                            )
+                            log.warning(detail)
+                            database.set_message(
+                                item.key,
+                                "umbraacque",
+                                "waiting_configuration",
+                                detail,
+                                item.message_id,
+                                item.uid,
+                            )
+                            notifier.send(
+                                "Nuova bolletta Umbra Acque disponibile",
+                                detail,
+                                provider="umbraacque",
+                                status="in_attesa",
+                            )
+                            continue
+
+                        log.info(
+                            "Email Umbra Acque riconosciuta: apertura link fattura e download PDF"
                         )
-                        log.warning(detail)
-                        database.set_message(
-                            item.key, "iren", "waiting_configuration", detail, item.message_id, item.uid
-                        )
-                        notifier.send(
-                            "Bolletta Iren disponibile", detail,
-                            provider="iren", status="in_attesa",
+                        _process_umbra_acque(
+                            item, rule, runtime, config, data_dir, archiver, database, notifier
                         )
                         continue
 
-                    log.info("Email Iren riconosciuta: avvio sincronizzazione portale e confronto fatture")
-                    _process_iren_portal(
-                        item, rule, runtime, config, data_dir, archiver, database, notifier
-                    )
+                    raise RuntimeError(f"Fornitore non gestito: {provider}")
+
                 except Exception as exc:  # noqa: BLE001
-                    log.exception("Errore elaborando email %s UID %s", provider.capitalize(), item.uid)
+                    log.exception(
+                        "Errore elaborando email %s UID %s",
+                        rule.get("display_name", provider.capitalize()),
+                        item.uid,
+                    )
                     database.set_message(item.key, provider, "error", str(exc), item.message_id, item.uid)
+                    display_name = str(rule.get("display_name", provider.capitalize()))
                     notifier.send(
-                        "Errore acquisizione Alperia" if provider == "alperia" else "Problema download bolletta Iren",
-                        str(exc), provider=provider, status="errore",
+                        f"Problema acquisizione bolletta {display_name}",
+                        str(exc),
+                        provider=provider,
+                        status="errore",
                     )
 
         if test_mode == "process" and test_uid not in seen_test_uid:

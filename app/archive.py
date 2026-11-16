@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -39,7 +40,6 @@ class PdfArchiver:
                 handle.write(content)
                 handle.flush()
                 os.fsync(handle.fileno())
-            # Do not replace a file that appeared while the temporary file was written.
             if target.exists():
                 raise FileExistsError(f"Il percorso è stato creato durante il salvataggio: {target}")
             temp.rename(target)
@@ -48,15 +48,38 @@ class PdfArchiver:
                 temp.unlink(missing_ok=True)
 
     def save(
-        self, provider: str, subdir: str, filename: str, content: bytes,
-        email_date, message_key: str,
+        self,
+        provider: str,
+        subdir: str,
+        filename: str,
+        content: bytes,
+        email_date,
+        message_key: str,
+        target_filename: str | None = None,
+        period_key: str | None = None,
     ) -> ArchiveResult:
         text = validate_and_extract_text(content)
         year, month, period_source = infer_period(
-            text, email_date,
-            fallback_to_email_month=bool(self.config.get("archive", {}).get("fallback_to_email_month", True)),
+            text,
+            email_date,
+            fallback_to_email_month=bool(
+                self.config.get("archive", {}).get("fallback_to_email_month", True)
+            ),
         )
         digest = hashlib.sha256(content).hexdigest()
+        stored_period = period_key or f"{year:04d}_{month:02d}"
+
+        if target_filename:
+            if (
+                Path(target_filename).name != target_filename
+                or not target_filename.lower().endswith(".pdf")
+                or not re.fullmatch(r"[A-Za-z0-9_.-]+", target_filename)
+            ):
+                raise ValueError("Nome file di archivio personalizzato non valido")
+            base_filename = target_filename
+        else:
+            base_filename = f"{year:04d}_{month:02d}.pdf"
+
         known = self.database.find_document(digest)
         if known:
             known_path = Path(known["path"])
@@ -72,7 +95,6 @@ class PdfArchiver:
                 raise FileExistsError(
                     f"Il percorso registrato nel database non è un file regolare: {known_path}"
                 )
-
             log.warning(
                 "PDF già registrato nel database ma file assente; ripristino il documento in %s",
                 known_path,
@@ -82,26 +104,34 @@ class PdfArchiver:
 
         target_dir = self.archive_root / subdir
         target_dir.mkdir(parents=True, exist_ok=True)
-        target = target_dir / f"{year:04d}_{month:02d}.pdf"
+        target = target_dir / base_filename
 
         if target.exists():
             existing_digest = hashlib.sha256(target.read_bytes()).hexdigest()
             if existing_digest == digest:
                 self.database.add_document(
-                    digest, provider, f"{year:04d}_{month:02d}", str(target), filename, message_key
+                    digest, provider, stored_period, str(target), filename, message_key
                 )
                 return ArchiveResult(target, year, month, digest, True, period_source)
+
             suffix = self.config.get("archive", {}).get(
                 "collision_suffix", "_versione_{digest8}"
             ).format(digest8=digest[:8])
-            target = target_dir / f"{year:04d}_{month:02d}{suffix}.pdf"
+            target = target_dir / f"{Path(base_filename).stem}{suffix}.pdf"
             if target.exists():
+                alternative_digest = hashlib.sha256(target.read_bytes()).hexdigest()
+                if alternative_digest == digest:
+                    self.database.add_document(
+                        digest, provider, stored_period, str(target), filename, message_key
+                    )
+                    return ArchiveResult(target, year, month, digest, True, period_source)
                 raise FileExistsError(
-                    f"Esiste già una versione alternativa per {year:04d}_{month:02d}; nessun file sovrascritto"
+                    f"Esiste già una versione alternativa per {base_filename}; "
+                    "nessun file sovrascritto"
                 )
 
         self._write_atomic(target, content)
         self.database.add_document(
-            digest, provider, f"{year:04d}_{month:02d}", str(target), filename, message_key
+            digest, provider, stored_period, str(target), filename, message_key
         )
         return ArchiveResult(target, year, month, digest, False, period_source)

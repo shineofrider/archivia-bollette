@@ -1,6 +1,6 @@
 # Archivia Bollette
 
-Servizio self-hosted per acquisire le bollette di **Alperia (corrente)** e **Iren (gas)** dalla stessa casella Gmail, archiviarle su OpenMediaVault e inviare notifiche a Home Assistant.
+Servizio self-hosted per acquisire le bollette di **Alperia (corrente)**, **Iren (gas)** e **Umbra Acque (acqua)** dalla stessa casella Gmail, archiviarle su OpenMediaVault e inviare notifiche a Home Assistant.
 
 ## Stato delle funzionalità
 
@@ -13,7 +13,8 @@ Servizio self-hosted per acquisire le bollette di **Alperia (corrente)** e **Ire
 | Rilevamento email di emissione Iren | Implementato |
 | Accesso a IrenYou e lettura elenco fatture | Implementato nel codice; da validare sul portale reale |
 | Download Iren, baseline iniziale e riconoscimento nuove fatture | Implementato nel codice; da validare sul portale reale |
-| Lettura importo, data emissione e scadenza dal portale | Implementata quando i dati sono presenti nel testo della pagina |
+| Lettura importo, data emissione e scadenza dal portale Iren | Implementata quando i dati sono presenti nel testo della pagina |
+| Link email e download PDF Umbra Acque | Implementato nel codice; primo download reale da collaudare |
 
 Il flusso Alperia è pronto per l'uso. L'automazione Iren è stata adattata alle schermate e ai percorsi forniti, ma il primo download reale deve ancora essere verificato. Non aggira CAPTCHA o sistemi MFA.
 
@@ -23,8 +24,9 @@ Il volume OMV viene montato in /archive:
 
 - /archive/Corrente/YYYY_MM.pdf
 - /archive/Gas/YYYY_MM.pdf
+- /archive/Acqua/YY_MM-MM.pdf
 
-Esempio: Corrente/2026_11.pdf. Se esiste già un documento diverso per lo stesso mese, non viene sovrascritto: viene salvata una variante con suffisso hash. Le cartelle vengono create automaticamente.
+Esempi: Corrente/2026_11.pdf, Gas/2026_11.pdf, Acqua/26_08-09.pdf. Se esiste già un documento diverso con lo stesso nome, non viene sovrascritto: viene salvata una variante con suffisso hash. Le cartelle vengono create automaticamente.
 
 ## Acquisizione Gmail
 
@@ -32,6 +34,7 @@ Esempio: Corrente/2026_11.pdf. Se esiste già un documento diverso per lo stesso
 - Cartella INBOX, modificabile in Environment.
 - Alperia: mittente noreply@alperia.eu, oggetto che inizia con Nuova fattura disponibile (senza vincoli su Nr. o sul numero fattura).
 - Iren: mittente noreply@mail.clienti.irenyou.gruppoiren.it, oggetto esatto Emissione Bolletta.
+- Umbra Acque: mittente no-reply@umbraacque.com, oggetto che inizia con My Umbra Acque: nuova bolletta web .
 - Controllo predefinito ogni 5 minuti.
 - Le email vengono lette in modalità read-only, senza marcarle come lette o eliminarle.
 
@@ -50,7 +53,7 @@ Il progetto viene pubblicato come immagine GHCR. Non occorre clonare il reposito
 6. In Files seleziona il progetto e premi Check, poi Up.
 7. Controlla Tools → Logs per verificare l'avvio.
 
-La cartella ./data è relativa alla directory Compose gestita dal plugin e conserva SQLite e il profilo browser Iren. Il volume PDF è già impostato sul percorso OMV fornito.
+La cartella ./data è relativa alla directory Compose gestita dal plugin e conserva SQLite e il profilo browser Iren. Il volume PDF è già impostato sul percorso OMV fornito. Il servizio crea automaticamente anche la sottocartella Acqua.
 
 ### Pubblicazione iniziale e GHCR
 
@@ -83,7 +86,7 @@ L'app usa IMAP TLS e non richiede Gmail API. Se l'account non consente password 
 3. Adatta il modello home-assistant/automation.yaml usando il tuo webhook_id.
 4. Copia l'URL webhook in HA_WEBHOOK_URL nel campo Environment OMV.
 
-Il modello crea una notifica persistente; puoi sostituire l'azione con la notifica del telefono. Per le bollette Iren il messaggio include importo da pagare, scadenza, data di emissione e numero fattura quando disponibili. Gli stessi dati sono inviati anche come campi separati nel payload webhook (amount, due_date, issue_date, invoice_number). Per Alperia il testo della notifica rimane invariato.
+Il modello crea una notifica persistente; puoi sostituire l'azione con la notifica del telefono. Per le bollette Iren il messaggio include importo da pagare, scadenza, data di emissione e numero fattura quando disponibili. Gli stessi dati sono inviati anche come campi separati nel payload webhook (amount, due_date, issue_date, invoice_number). Per Alperia il testo della notifica rimane invariato. Per Umbra Acque, quando i dati sono presenti nella pagina o nel PDF, la notifica include importo da pagare, scadenza, data di emissione, numero fattura e periodo bimestrale.
 
 ## IrenYou: accesso e sincronizzazione fatture
 
@@ -125,11 +128,47 @@ Configurazione Environment:
 
 Lascia vuoti i selettori personalizzati finché il riconoscimento automatico non viene verificato. In presenza di OTP/CAPTCHA/MFA il sistema si ferma e notifica, senza tentare di aggirare le protezioni.
 
+## Umbra Acque: download dal link email
+
+Umbra Acque invia una notifica all'indirizzo no-reply@umbraacque.com con oggetto che inizia con "My Umbra Acque: nuova bolletta web ". L'email contiene il link diretto al dominio HTTPS bollettainterattiva.umbraacque.com.
+
+Il flusso previsto è:
+
+1. Riconoscere mittente e prefisso dell'oggetto.
+2. Estrarre dal corpo email il link HTTPS che punta esattamente a bollettainterattiva.umbraacque.com. Il link contiene un identificativo opaco della fattura: non viene scritto nei log.
+3. Aprire il link con Chromium/Playwright.
+4. Attendere il comando "Scarica la tua bolletta in pdf" e intercettare il download.
+5. Verificare che il file scaricato sia un PDF.
+6. Leggere periodo, numero fattura, importo e scadenza dalla pagina e, se necessario, dal PDF.
+7. Archiviare in /archive/Acqua con il nome bimestrale e inviare la notifica Home Assistant.
+
+### Nome del PDF bimestrale
+
+Il portale mostra l'intervallo di fatturazione, non necessariamente i due mesi da usare nel nome. Quando la data finale cade nei primi 15 giorni del mese successivo, quel mese viene considerato come data di chiusura/lettura e non come ulteriore mese di competenza.
+
+Esempio della schermata: dal 12/08/2026 al 08/10/2026. I mesi principali sono agosto e settembre 2026, quindi il file viene salvato come:
+
+    Acqua/26_08-09.pdf
+
+Il nome viene ricavato dalle date effettive lette sulla pagina o nel PDF. Se manca un intervallo valido, il sistema si ferma senza creare un nome basato sulla data dell'email.
+
+### Configurazione
+
+Non servono username o password Umbra Acque: il link contenuto nell'email porta direttamente alla fattura. Per prudenza l'automazione parte disabilitata; dopo la scansione email, abilitarla nel campo Environment di OMV:
+
+    UMBRA_AUTOMATION_ENABLED=true
+    UMBRA_DEBUG_SCREENSHOT=true
+
+Per i successivi utilizzi si può lasciare UMBRA_DEBUG_SCREENSHOT=false. In caso di errore, quando il debug è attivo viene salvato /data/tmp/umbra-error.png.
+
+Il link email è un riferimento di accesso alla fattura: non copiarlo nei log, non pubblicarlo e non condividerlo.
+
 ## Dati e backup
 
 - data/bollette.sqlite3: registro email, documenti, stato della baseline Iren e storico delle fatture Iren.
 - data/tmp/iren-profile: eventuali cookie/sessioni IrenYou.
-- Cartelle Corrente e Gas: bollette PDF.
+- data/tmp: file temporanei e screenshot diagnostici Umbra Acque (i link di accesso non vengono conservati nel database).
+- Cartelle Corrente, Gas e Acqua: bollette PDF.
 
 Includere data/ e la cartella Bollette nei backup. Non pubblicare mai credenziali, database o profilo browser.
 
@@ -157,6 +196,8 @@ Per provare una singola email:
        TEST_FORCE_REPROCESS=false
 
 Per Iren usare TEST_PROVIDER=iren e l'UID della notifica Iren. Il test process esegue l'accesso al portale se IREN_AUTOMATION_ENABLED=true e può archiviare realmente i PDF.
+
+Per Umbra Acque usare TEST_PROVIDER=umbraacque e l'UID della mail con oggetto My Umbra Acque. Con TEST_MODE=scan il log indica link_portale=True/False senza mostrare il link completo. Per il download reale impostare UMBRA_AUTOMATION_ENABLED=true e poi usare TEST_MODE=process con l'UID preciso: il PDF viene scaricato e archiviato in Acqua.
 
 Per testare soltanto la notifica Home Assistant senza scaricare o archiviare documenti, impostare:
 

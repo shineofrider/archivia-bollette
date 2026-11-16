@@ -5,13 +5,20 @@ mail:
 
 providers:
   alperia:
+    display_name: Alperia
     sender: noreply@alperia.eu
     subject_prefix: "Nuova fattura disponibile"
     archive_subdir: Corrente
   iren:
+    display_name: Iren
     sender: noreply@mail.clienti.irenyou.gruppoiren.it
     subject_exact: Emissione Bolletta
     archive_subdir: Gas
+  umbraacque:
+    display_name: Umbra Acque
+    sender: no-reply@umbraacque.com
+    subject_prefix: "My Umbra Acque: nuova bolletta web "
+    archive_subdir: Acqua
 
 archive:
   filename_format: '{year:04d}_{month:02d}.pdf'
@@ -26,6 +33,12 @@ iren:
   login_url: https://clienti.irenyou.gruppoiren.it/login
   home_url: https://clienti.irenyou.gruppoiren.it/area-riservata/home
   bills_url: https://clienti.irenyou.gruppoiren.it/area-riservata/spese
+  headless: true
+  navigation_timeout_ms: 45000
+  download_timeout_ms: 45000
+
+umbraacque:
+  portal_host: bollettainterattiva.umbraacque.com
   headless: true
   navigation_timeout_ms: 45000
   download_timeout_ms: 45000

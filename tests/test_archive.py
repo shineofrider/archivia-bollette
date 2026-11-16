@@ -68,3 +68,43 @@ def test_archiver_does_not_overwrite_changed_file_for_known_pdf(tmp_path: Path):
 
     with pytest.raises(FileExistsError, match="contenuto del file è diverso"):
         archiver.save("alperia", "Corrente", "bolletta.pdf", content, email_date, "msg-1")
+
+
+
+def test_archiver_saves_custom_bimonthly_filename_and_period_key(tmp_path: Path):
+    archiver, db = make_archiver(tmp_path)
+    email_date = datetime(2026, 11, 16, tzinfo=timezone.utc)
+    content = pdf_bytes(140)
+
+    result = archiver.save(
+        "umbraacque",
+        "Acqua",
+        "umbra-bill.pdf",
+        content,
+        email_date,
+        "umbra-message-1",
+        target_filename="26_08-09.pdf",
+        period_key="2026_08-09",
+    )
+
+    assert result.path == tmp_path / "archive" / "Acqua" / "26_08-09.pdf"
+    assert result.path.read_bytes() == content
+    stored = db.find_document(result.digest)
+    assert stored["period"] == "2026_08-09"
+    assert stored["provider"] == "umbraacque"
+
+
+def test_archiver_rejects_unsafe_custom_filename(tmp_path: Path):
+    archiver, _ = make_archiver(tmp_path)
+
+    with pytest.raises(ValueError, match="Nome file di archivio personalizzato non valido"):
+        archiver.save(
+            "umbraacque",
+            "Acqua",
+            "umbra-bill.pdf",
+            pdf_bytes(150),
+            datetime(2026, 11, 16, tzinfo=timezone.utc),
+            "umbra-message-2",
+            target_filename="../26_08-09.pdf",
+            period_key="2026_08-09",
+        )

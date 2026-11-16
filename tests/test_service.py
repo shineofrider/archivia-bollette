@@ -185,3 +185,12 @@ def test_notification_test_rejects_unsupported_provider():
         assert "TEST_PROVIDER=iren" in str(exc)
     else:
         raise AssertionError("Only the Iren notification test is currently supported")
+
+
+
+def test_umbra_acque_subject_prefix_requires_the_following_space():
+    item = make_item(
+        "no-reply@umbraacque.com",
+        "My Umbra Acque: nuova bolletta webinar 9026011001234291",
+    )
+    assert _matching_provider(item, PROVIDERS) is None

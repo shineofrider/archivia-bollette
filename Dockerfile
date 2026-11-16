@@ -22,7 +22,7 @@ RUN pip install --no-cache-dir -r /app/requirements.txt \
 COPY app /app/app
 COPY config/config.yaml /config/config.yaml
 
-RUN mkdir -p /data /archive/Corrente /archive/Gas /tmp/iren \
+RUN mkdir -p /data /archive/Corrente /archive/Gas /archive/Acqua /tmp/iren /tmp/umbra \
     && chmod 755 /app
 
 CMD ["python", "-m", "app"]
